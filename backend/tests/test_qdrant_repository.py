@@ -96,6 +96,7 @@ class TestSearch:
             query_vector=vector,
             limit=5,
             score_threshold=None,
+            query_filter=None,
         )
 
 

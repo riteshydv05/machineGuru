@@ -36,3 +36,15 @@ uploads/
 
 # Docker
 .docker/
+
+# Qdrant binary and local data (large files, not needed in git)
+qdrant_bin/
+qdrant_storage/
+snapshots/
+
+# Logs directory
+logs/
+
+# Backups
+backups/
+offline/

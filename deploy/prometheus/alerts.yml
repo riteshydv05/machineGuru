@@ -1,0 +1,66 @@
+groups:
+  - name: machine-guru-alerts
+    interval: 30s
+    rules:
+      - alert: BackendDown
+        expr: up{job="machine-guru-backend"} == 0
+        for: 30s
+        labels:
+          severity: critical
+        annotations:
+          summary: "MachineGuru backend is down"
+          description: "Backend has been unreachable for 30 seconds"
+
+      - alert: HighErrorRate
+        expr: rate(machineguru_request_total{status="5xx"}[5m]) > 0.05
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High HTTP error rate"
+          description: "5xx error rate is {{ $value }} req/s over 5m"
+
+      - alert: HighMemoryUsage
+        expr: machineguru_memory_mb{type="rss"} > 3072
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High memory usage on backend"
+          description: "Memory usage is {{ $value }}MB (limit 4GB)"
+
+      - alert: SlowQueries
+        expr: histogram_quantile(0.95, rate(machineguru_query_duration_seconds_bucket[5m])) > 10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Slow query responses"
+          description: "P95 query latency is {{ $value }}s over 5m"
+
+      - alert: LowCacheHitRate
+        expr: rate(machineguru_query_cache_hits_total[5m]) / (rate(machineguru_query_cache_hits_total[5m]) + rate(machineguru_query_cache_misses_total[5m])) < 0.1
+        for: 10m
+        labels:
+          severity: info
+        annotations:
+          summary: "Low query cache hit rate"
+          description: "Cache hit rate is {{ $value | humanizePercentage }}"
+
+      - alert: QdrantDown
+        expr: up{job="qdrant"} == 0
+        for: 30s
+        labels:
+          severity: critical
+        annotations:
+          summary: "Qdrant vector database is down"
+          description: "Qdrant has been unreachable for 30 seconds"
+
+      - alert: HighGPUUsage
+        expr: machineguru_gpu_util_percent > 90
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High GPU utilization"
+          description: "GPU usage at {{ $value }}% for 5 minutes"

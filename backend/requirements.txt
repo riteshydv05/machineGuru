@@ -1,0 +1,30 @@
+# Core
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+pydantic==2.10.4
+pydantic-settings==2.7.1
+sse-starlette==2.2.1
+
+
+# Vector Database
+qdrant-client==1.13.2
+
+# Document Processing
+pymupdf==1.25.3
+python-docx==1.1.2
+
+# AI / ML
+ollama==0.4.7
+sentence-transformers==3.4.1
+torch>=2.5.0
+
+# Monitoring & Benchmarking
+psutil>=6.1.0
+prometheus-client>=0.21.0
+
+# Utilities
+python-multipart==0.0.20
+python-dotenv==1.0.1
+loguru==0.7.3
+
+

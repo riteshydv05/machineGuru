@@ -1,0 +1,350 @@
+# API Reference
+
+Base URL: `http://localhost:8000/api/v1`
+
+All endpoints accept and return JSON. The streaming endpoint uses Server-Sent Events.
+
+---
+
+## Health
+
+### `GET /health`
+
+Returns service health status.
+
+**Response `200`**
+
+```json
+{
+  "status": "healthy",
+  "version": "0.1.0",
+  "timestamp": "2026-01-15T10:30:00Z",
+  "uptime_seconds": 3600.5,
+  "qdrant": {
+    "connected": true,
+    "collection": "machine_knowledge",
+    "vector_size": 384,
+    "point_count": 1523,
+    "error": null
+  }
+}
+```
+
+---
+
+## Ingestion
+
+### `POST /ingest`
+
+Upload and ingest a document. Supports PDF, DOCX, and TXT files up to 50 MB.
+
+**Request** — `multipart/form-data`
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `file` | File | Document to ingest |
+
+**Response `201`**
+
+```json
+{
+  "document_id": "a1b2c3d4-...",
+  "filename": "manual.pdf",
+  "content_type": "application/pdf",
+  "size_bytes": 2457600,
+  "page_count": 42,
+  "chunk_count": 187,
+  "average_chunk_length": 487.3,
+  "embedding_dimensions": 384,
+  "qdrant_stored": true,
+  "processing_time_seconds": 12.45
+}
+```
+
+**Errors**
+
+| Code | Status | Description |
+|------|--------|-------------|
+| `INVALID_FILE_TYPE` | 400 | Unsupported file extension |
+| `FILE_TOO_LARGE` | 413 | File exceeds 50 MB limit |
+
+---
+
+## Query
+
+### `POST /query`
+
+Ask a question based on ingested documents.
+
+**Request**
+
+```json
+{
+  "text": "What are the torque specifications?",
+  "top_k": 5
+}
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `text` | string | — | Question (1–4096 chars) |
+| `top_k` | int | 5 | Number of chunks to retrieve (1–50) |
+
+**Response `200`**
+
+```json
+{
+  "answer": "The torque specifications are 45 Nm for the main bolts [Source 2] and 22 Nm for the cover [Source 1].",
+  "sources": [
+    {
+      "document_id": "a1b2c3d4-...",
+      "filename": "manual.pdf",
+      "page": 12,
+      "chunk_index": 45,
+      "score": 0.892
+    },
+    {
+      "document_id": "a1b2c3d4-...",
+      "filename": "manual.pdf",
+      "page": 14,
+      "chunk_index": 52,
+      "score": 0.764
+    }
+  ],
+  "citations": [
+    {
+      "source_index": 0,
+      "document_id": "a1b2c3d4-...",
+      "filename": "manual.pdf",
+      "page": 12,
+      "chunk_index": 45
+    }
+  ],
+  "query_text": "What are the torque specifications?",
+  "timestamp": "2026-01-15T10:30:00Z"
+}
+```
+
+---
+
+### `POST /query/stream`
+
+Stream the answer token-by-token using Server-Sent Events.
+
+**Request** — Same as `POST /query`
+
+**Response** — SSE stream (`text/event-stream`)
+
+```
+event: message
+data: {"type":"sources","sources":[{...}]}
+
+event: message
+data: {"type":"token","text":"The"}
+
+event: message
+data: {"type":"token","text":" torque"}
+
+...
+
+event: message
+data: {"type":"done","citations":[{...}]}
+```
+
+**Events**
+
+| Type | Payload | Description |
+|------|---------|-------------|
+| `sources` | `SourceReference[]` | Retrieved sources (sent first) |
+| `token` | `{text: string}` | A single token of the answer |
+| `done` | `{citations: Citation[]\|null}` | Final event with citation data |
+
+---
+
+## Upload (Legacy)
+
+### `POST /upload`
+
+Upload a document without ingesting (for staged pipelines).
+
+**Request** — `multipart/form-data`
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `file` | File | Document to upload |
+
+**Response `201`**
+
+```json
+{
+  "id": "a1b2c3d4-...",
+  "filename": "manual.pdf",
+  "content_type": "application/pdf",
+  "size_bytes": 2457600,
+  "uploaded_at": "2026-01-15T10:30:00Z"
+}
+```
+
+---
+
+## Monitoring
+
+### `GET /health`
+
+Health check. See above.
+
+### `GET /stats`
+
+Detailed runtime statistics.
+
+**Response `200`**
+
+```json
+{
+  "service": "MachineGuru",
+  "version": "0.1.0",
+  "memory_mb": 245.3,
+  "cpu_percent": 12.5,
+  "gpu": {
+    "available": true,
+    "memory_mb": 1024.0,
+    "util_pct": 45
+  },
+  "models": {
+    "embedding": {
+      "loaded": true,
+      "idle_seconds": 12.3
+    }
+  },
+  "caches": {
+    "embedding": {
+      "size": 128,
+      "capacity": 1024,
+      "hits": 95,
+      "misses": 200,
+      "hit_rate": 0.322
+    },
+    "query": {
+      "size": 15,
+      "capacity": 128,
+      "hits": 10,
+      "misses": 50,
+      "hit_rate": 0.167
+    }
+  },
+  "concurrency": {
+    "llm": {"max_concurrent": 2, "active": 0, "queued": 0, "completed": 42},
+    "embedding": {"max_concurrent": 1, "active": 0, "queued": 0, "completed": 187},
+    "qdrant": {"max_concurrent": 8, "active": 0, "queued": 0, "completed": 423}
+  }
+}
+```
+
+### `GET /metrics`
+
+Prometheus-formatted metrics (when `prometheus-client` is installed and `METRICS_ENABLED=true`).
+
+**Available Metrics:**
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `machineguru_query_total` | Counter | Total queries by status |
+| `machineguru_query_duration_seconds` | Histogram | Query latency distribution |
+| `machineguru_query_tokens_total` | Counter | Tokens generated by LLM |
+| `machineguru_query_cache_hits_total` | Counter | Query cache hits |
+| `machineguru_query_cache_misses_total` | Counter | Query cache misses |
+| `machineguru_ingestion_total` | Counter | Documents ingested by status |
+| `machineguru_ingestion_duration_seconds` | Histogram | Ingestion time |
+| `machineguru_ingestion_chunks_total` | Counter | Chunks created |
+| `machineguru_embedding_duration_seconds` | Histogram | Embedding time |
+| `machineguru_embedding_cache_hits_total` | Counter | Embedding cache hits |
+| `machineguru_memory_mb` | Gauge | Process RSS memory |
+| `machineguru_gpu_memory_mb` | Gauge | GPU memory usage |
+| `machineguru_gpu_util_percent` | Gauge | GPU utilization |
+| `machineguru_concurrent_llm` | Gauge | Concurrent LLM requests |
+| `machineguru_concurrent_embeddings` | Gauge | Concurrent embedding requests |
+| `machineguru_concurrent_qdrant` | Gauge | Concurrent Qdrant requests |
+| `machineguru_model_loaded` | Gauge | Model loaded state |
+| `machineguru_request_total` | Counter | HTTP requests by method/endpoint/status |
+| `machineguru_request_duration_seconds` | Histogram | HTTP request latency |
+| `machineguru_active_requests` | Gauge | Currently active requests |
+| `machineguru_ollama_request_duration_seconds` | Histogram | Ollama request latency |
+| `machineguru_qdrant_request_duration_seconds` | Histogram | Qdrant request latency |
+
+Example output:
+```
+# HELP machineguru_query_total Total queries processed
+# TYPE machineguru_query_total counter
+machineguru_query_total{status="ok"} 42.0
+# HELP machineguru_query_duration_seconds Query execution time
+# TYPE machineguru_query_duration_seconds histogram
+machineguru_query_duration_seconds_bucket{le="0.1"} 5.0
+...
+```
+
+---
+
+## Schemas
+
+### ErrorResponse
+
+```json
+{
+  "error_id": "uuid",
+  "error_code": "ERROR_CODE",
+  "message": "Human-readable message",
+  "detail": "Optional debug details"
+}
+```
+
+| Code | Status | Description |
+|------|--------|-------------|
+| `INVALID_FILE_TYPE` | 400 | Unsupported file extension |
+| `FILE_TOO_LARGE` | 413 | File exceeds size limit |
+| `QUERY_VALIDATION_ERROR` | 422 | Invalid query (empty or too long) |
+| `DOCUMENT_PROCESSING_ERROR` | 422 | Failed to process document |
+| `NOT_FOUND` | 404 | Resource not found |
+| `LLM_ERROR` | 503 | LLM generation failed |
+| `QDRANT_ERROR` | 503 | Qdrant operation failed |
+| `EMBEDDING_ERROR` | 500 | Embedding generation failed |
+| `RATE_LIMIT_EXCEEDED` | 429 | Too many requests |
+| `SERVICE_UNAVAILABLE` | 503 | Server shutting down |
+| `INTERNAL_ERROR` | 500 | Unhandled exception |
+
+---
+
+## Rate Limiting
+
+Rate limiting is applied at two levels:
+
+### Application Layer (Token Bucket)
+
+Per-IP token bucket with 10 req/s rate and burst of 20.
+
+| Endpoint | Rate | Burst |
+|----------|------|-------|
+| `/api/v1/query` | 10 req/s | 20 |
+| `/api/v1/query/stream` | 10 req/s | 20 |
+| `/api/v1/ingest` | 10 req/s | 20 |
+| `/api/v1/upload` | 10 req/s | 20 |
+| `/api/v1/health`, `/api/v1/stats`, `/metrics` | Unlimited | — |
+
+### Nginx Layer
+
+Additional rate limiting at the reverse proxy level (10 req/s per IP with burst 20).
+
+When rate limited, the API returns:
+
+```json
+{
+  "error_id": "uuid",
+  "error_code": "RATE_LIMIT_EXCEEDED",
+  "message": "Too many requests. Try again later.",
+  "detail": null
+}
+```
+
+**Response headers:**
+- `Retry-After: 1`
+
+**Status code:** `429 Too Many Requests`

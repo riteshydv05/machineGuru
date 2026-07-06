@@ -1,0 +1,251 @@
+{
+  "title": "MachineGuru - System Overview",
+  "uid": "machine-guru-overview",
+  "schemaVersion": 38,
+  "version": 1,
+  "timezone": "utc",
+  "panels": [
+    {
+      "title": "Backend Health",
+      "type": "stat",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "expr": "up{job=\"machine-guru-backend\"}",
+          "legendFormat": "Backend"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": 0 }, { "color": "green", "value": 1 }] }
+        }
+      }
+    },
+    {
+      "title": "Memory Usage",
+      "type": "gauge",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 4, "x": 4, "y": 0 },
+      "targets": [
+        {
+          "expr": "machineguru_memory_mb{type=\"rss\"}",
+          "legendFormat": "Memory"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "MB",
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{ "color": "green", "value": 0 }, { "color": "yellow", "value": 2048 }, { "color": "red", "value": 3072 }]
+          }
+        }
+      }
+    },
+    {
+      "title": "GPU Memory",
+      "type": "gauge",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 4, "x": 8, "y": 0 },
+      "targets": [
+        {
+          "expr": "machineguru_gpu_memory_mb",
+          "legendFormat": "GPU Memory"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "MB",
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{ "color": "green", "value": 0 }, { "color": "yellow", "value": 4096 }, { "color": "red", "value": 6144 }]
+          }
+        }
+      }
+    },
+    {
+      "title": "GPU Utilization",
+      "type": "gauge",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 4, "x": 12, "y": 0 },
+      "targets": [
+        {
+          "expr": "machineguru_gpu_util_percent",
+          "legendFormat": "GPU Util"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "%",
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{ "color": "green", "value": 0 }, { "color": "yellow", "value": 70 }, { "color": "red", "value": 90 }]
+          }
+        }
+      }
+    },
+    {
+      "title": "Model Loaded",
+      "type": "stat",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 4, "x": 16, "y": 0 },
+      "targets": [
+        {
+          "expr": "machineguru_model_loaded",
+          "legendFormat": "{{model_name}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": 0 }, { "color": "green", "value": 1 }] }
+        }
+      }
+    },
+    {
+      "title": "CPU Usage",
+      "type": "gauge",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 4, "x": 20, "y": 0 },
+      "targets": [],
+      "description": "CPU usage from /api/v1/stats"
+    },
+    {
+      "title": "Query Latency (P95)",
+      "type": "graph",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, rate(machineguru_query_duration_seconds_bucket[5m]))",
+          "legendFormat": "P95"
+        },
+        {
+          "expr": "histogram_quantile(0.50, rate(machineguru_query_duration_seconds_bucket[5m]))",
+          "legendFormat": "P50"
+        },
+        {
+          "expr": "histogram_quantile(0.99, rate(machineguru_query_duration_seconds_bucket[5m]))",
+          "legendFormat": "P99"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" } }
+    },
+    {
+      "title": "Query Throughput",
+      "type": "graph",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "targets": [
+        {
+          "expr": "rate(machineguru_query_total[5m])",
+          "legendFormat": "Queries/s"
+        },
+        {
+          "expr": "rate(machineguru_ingestion_total[5m])",
+          "legendFormat": "Ingestions/s"
+        }
+      ]
+    },
+    {
+      "title": "HTTP Request Rate",
+      "type": "graph",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "targets": [
+        {
+          "expr": "sum(rate(machineguru_request_total[5m])) by (status)",
+          "legendFormat": "{{status}}"
+        }
+      ]
+    },
+    {
+      "title": "HTTP Request Duration (P95)",
+      "type": "graph",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(machineguru_request_duration_seconds_bucket[5m])) by (le))",
+          "legendFormat": "P95"
+        },
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(machineguru_request_duration_seconds_bucket[5m])) by (le))",
+          "legendFormat": "P50"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" } }
+    },
+    {
+      "title": "Cache Hit Rate",
+      "type": "graph",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 20 },
+      "targets": [
+        {
+          "expr": "rate(machineguru_query_cache_hits_total[5m]) / (rate(machineguru_query_cache_hits_total[5m]) + rate(machineguru_query_cache_misses_total[5m]))",
+          "legendFormat": "Query Cache"
+        },
+        {
+          "expr": "rate(machineguru_embedding_cache_hits_total[5m]) / (rate(machineguru_embedding_cache_hits_total[5m]) + rate(machineguru_query_cache_misses_total[5m]))",
+          "legendFormat": "Embedding Cache"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "percentunit" } }
+    },
+    {
+      "title": "Token Generation Rate",
+      "type": "graph",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 20 },
+      "targets": [
+        {
+          "expr": "rate(machineguru_query_tokens_total[5m])",
+          "legendFormat": "Tokens/s"
+        }
+      ]
+    },
+    {
+      "title": "Ingestion Duration",
+      "type": "graph",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 28 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, rate(machineguru_ingestion_duration_seconds_bucket[5m]))",
+          "legendFormat": "P95"
+        },
+        {
+          "expr": "histogram_quantile(0.50, rate(machineguru_ingestion_duration_seconds_bucket[5m]))",
+          "legendFormat": "P50"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" } }
+    },
+    {
+      "title": "Concurrent Requests",
+      "type": "graph",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 28 },
+      "targets": [
+        {
+          "expr": "machineguru_concurrent_llm",
+          "legendFormat": "LLM"
+        },
+        {
+          "expr": "machineguru_concurrent_embeddings",
+          "legendFormat": "Embeddings"
+        },
+        {
+          "expr": "machineguru_concurrent_qdrant",
+          "legendFormat": "Qdrant"
+        }
+      ]
+    }
+  ]
+}

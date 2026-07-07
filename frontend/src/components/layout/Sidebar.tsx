@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { BarChart3, History, MessageSquare, Menu, Settings, Upload, X } from "lucide-react";
+import { BarChart3, FolderOpen, History, MessageSquare, Menu, Settings, Upload, X } from "lucide-react";
 import { NavLink } from "react-router-dom";
 import { cn } from "@/utils/cn";
 import { ThemeToggle } from "./ThemeToggle";
@@ -7,6 +7,7 @@ import { ThemeToggle } from "./ThemeToggle";
 const links = [
   { to: "/", label: "Dashboard", icon: BarChart3 },
   { to: "/upload", label: "Upload", icon: Upload },
+  { to: "/documents", label: "Documents", icon: FolderOpen },
   { to: "/chat", label: "Chat", icon: MessageSquare },
   { to: "/history", label: "History", icon: History },
   { to: "/settings", label: "Settings", icon: Settings },

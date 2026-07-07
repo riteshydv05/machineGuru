@@ -22,8 +22,10 @@ class DocumentInfo(BaseModel):
     uploaded_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     page_count: int = 0
     chunk_count: int = 0
+    embedding_count: int = 0      # actual vector count in Qdrant
     size_bytes: int = 0
     status: str = "indexed"          # "indexed" | "processing" | "error"
+    image_count: int = 0             # extracted images
 
 
 class DocumentRegistry:
@@ -60,6 +62,18 @@ class DocumentRegistry:
         await self._persist()
         logger.info("Document registered | id={} file={}", info.document_id, info.filename)
 
+    async def update(self, document_id: str, **kwargs) -> DocumentInfo | None:
+        """Update specific fields on a document."""
+        if document_id not in self._docs:
+            return None
+        doc = self._docs[document_id]
+        for key, value in kwargs.items():
+            if hasattr(doc, key):
+                setattr(doc, key, value)
+        self._docs[document_id] = doc
+        await self._persist()
+        return doc
+
     async def list_all(self) -> list[DocumentInfo]:
         return sorted(self._docs.values(), key=lambda d: d.uploaded_at, reverse=True)
 
@@ -81,14 +95,32 @@ class DocumentRegistry:
         docs = await self.list_all()
         return docs[0] if docs else None
 
-    async def delete(self, document_id: str) -> bool:
+    async def delete(self, document_id: str, upload_dir: str = "uploads") -> bool:
         if document_id not in self._docs:
             return False
+
+        doc = self._docs[document_id]
+
+        # Clean up uploaded PDF file from disk
+        upload_path = Path(upload_dir)
+        for ext in [".pdf", ".txt", ".docx"]:
+            file_path = upload_path / f"{document_id}{ext}"
+            if file_path.exists():
+                file_path.unlink()
+                logger.info("Deleted file from disk | path={}", file_path)
+
+        # Clean up extracted images directory
+        images_dir = upload_path / "images" / document_id
+        if images_dir.exists():
+            import shutil
+            shutil.rmtree(images_dir, ignore_errors=True)
+            logger.info("Deleted images directory | path={}", images_dir)
+
         del self._docs[document_id]
         if self._active_id == document_id:
             self._active_id = None
         await self._persist()
-        logger.info("Document deleted from registry | id={}", document_id)
+        logger.info("Document deleted from registry | id={} file={}", document_id, doc.filename)
         return True
 
     @property

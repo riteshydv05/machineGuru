@@ -10,14 +10,29 @@ class Settings(BaseSettings):
     )
 
     PROJECT_NAME: str = "MachineGuru"
-    VERSION: str = "0.1.0"
+    VERSION: str = "0.2.0"
     DEBUG: bool = True
 
-    CORS_ORIGINS: list[str] = ["http://localhost:5173"]
+    CORS_ORIGINS: list[str] = ["http://localhost:5173", "http://localhost:5174", "http://localhost:3000"]
 
     OLLAMA_BASE_URL: str = "http://localhost:11434"
     LLM_MODEL: str = "llama3.2:1b"
     EMBEDDING_MODEL: str = "intfloat/multilingual-e5-small"
+
+    # LLM generation parameters
+    NUM_CTX: int = 8192           # Context window size
+    NUM_PREDICT: int = 4096       # Max output tokens
+    LLM_TEMPERATURE: float = 0.1
+    LLM_KEEP_ALIVE: str = "10m"  # Keep model loaded between requests
+
+    # Multimodal / Vision
+    VISION_MODEL: str = "llava:7b"
+    ENABLE_MULTIMODAL: bool = True
+
+    # Hybrid Retrieval
+    BM25_WEIGHT: float = 0.3
+    DENSE_WEIGHT: float = 0.7
+    SCORE_THRESHOLD: float = 0.15  # Minimum relevance score
 
     QDRANT_HOST: str = "localhost"
     QDRANT_PORT: int = 6333

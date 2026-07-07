@@ -26,6 +26,7 @@ class IngestionResult(BaseModel):
     size_bytes: int
     page_count: int
     chunk_count: int
+    image_count: int = 0
     average_chunk_length: float
     embedding_dimensions: int
     qdrant_stored: bool
@@ -67,6 +68,18 @@ class IngestionUseCase:
                     pages, document.id,
                 )
 
+            # Multimodal: extract and caption images if enabled
+            image_count = 0
+            if settings.ENABLE_MULTIMODAL and ext == ".pdf":
+                image_chunks, image_count = await self._extract_and_caption_images(
+                    str(file_path), document.id,
+                )
+                chunk_objects.extend(image_chunks)
+                logger.info(
+                    "Multimodal | extracted {} images, created {} image chunks",
+                    image_count, len(image_chunks),
+                )
+
             embedded_chunks, embed_time = await self._embedder.embed_chunks(chunk_objects)
 
             await self._store_vectors(embedded_chunks, document)
@@ -81,18 +94,21 @@ class IngestionUseCase:
                 uploaded_at=document.uploaded_at.isoformat(),
                 page_count=page_count,
                 chunk_count=len(embedded_chunks),
+                embedding_count=len(embedded_chunks),
                 size_bytes=document.size_bytes,
                 status="indexed",
+                image_count=image_count,
             )
             await self._registry.register(doc_info)
             await self._registry.set_active(document.id)
 
             logger.info(
-                "Ingestion complete | id={} file={} pages={} chunks={} embed_time={:.2f}s total={:.2f}s",
+                "Ingestion complete | id={} file={} pages={} chunks={} images={} embed_time={:.2f}s total={:.2f}s",
                 document.id,
                 document.filename,
                 page_count,
                 len(embedded_chunks),
+                image_count,
                 embed_time,
                 elapsed,
             )
@@ -104,11 +120,73 @@ class IngestionUseCase:
                 size_bytes=document.size_bytes,
                 page_count=page_count,
                 chunk_count=len(embedded_chunks),
+                image_count=image_count,
                 average_chunk_length=avg_len,
                 embedding_dimensions=self._embedder.dimensions,
                 qdrant_stored=True,
                 processing_time_seconds=round(elapsed, 3),
             )
+
+    async def _extract_and_caption_images(
+        self,
+        pdf_path: str,
+        document_id: str,
+    ) -> tuple[list[Chunk], int]:
+        """Extract images from PDF and generate captions using vision model."""
+        try:
+            from infrastructure.document_processing.image_extractor import ImageExtractor
+            from infrastructure.llm.vision_service import VisionService
+
+            extractor = ImageExtractor(output_dir=str(self._upload_dir / "images"))
+            extracted_images = extractor.extract_images(pdf_path, document_id)
+
+            if not extracted_images:
+                return [], 0
+
+            # Generate captions
+            vision = VisionService()
+            image_paths = [img.image_path for img in extracted_images]
+            captions = await vision.caption_images_batch(image_paths, max_concurrent=1)
+
+            # Create chunks from captioned images
+            image_chunks: list[Chunk] = []
+            for img, caption in zip(extracted_images, captions):
+                if not caption:
+                    continue
+
+                # Combine OCR text and caption
+                content_parts = [f"[{img.figure_label}]"]
+                if caption:
+                    content_parts.append(f"Description: {caption}")
+                if img.ocr_text:
+                    content_parts.append(f"Text in image: {img.ocr_text}")
+
+                content = "\n".join(content_parts)
+
+                chunk = Chunk(
+                    document_id=document_id,
+                    index=0,  # will be reindexed
+                    content=content,
+                    page=img.page_number,
+                    chunk_type="image",
+                    image_path=img.image_path,
+                    figure_number=img.figure_label,
+                    caption=caption,
+                    metadata={
+                        "width": str(img.width),
+                        "height": str(img.height),
+                    },
+                )
+                image_chunks.append(chunk)
+
+            return image_chunks, len(extracted_images)
+
+        except ImportError as exc:
+            logger.warning("Multimodal dependencies not available | error={}", exc)
+            return [], 0
+        except Exception as exc:
+            logger.error("Image extraction/captioning failed | error={}", exc)
+            return [], 0
 
     async def _chunk_pages_parallel(
         self,
@@ -162,6 +240,9 @@ class IngestionUseCase:
                     "chunk_index": chunk.index,
                     "page": chunk.page,
                     "metadata": chunk.metadata,
+                    "chunk_type": chunk.chunk_type,
+                    "figure_number": chunk.figure_number,
+                    "image_path": chunk.image_path,
                 },
             )
             for chunk in chunks

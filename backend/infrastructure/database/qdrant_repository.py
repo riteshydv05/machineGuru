@@ -3,6 +3,9 @@ from qdrant_client import AsyncQdrantClient
 from qdrant_client.http.exceptions import ResponseHandlingException
 from qdrant_client.http.models import (
     Distance,
+    FieldCondition,
+    Filter,
+    MatchValue,
     PointStruct,
     ScoredPoint,
     UpdateResult,
@@ -96,8 +99,6 @@ class QdrantRepository:
 
     async def delete_by_document(self, document_id: str) -> UpdateResult:
         client = await self._get_client()
-        from qdrant_client.http.models import FieldCondition, Filter, MatchValue
-
         try:
             result = await client.delete(
                 collection_name=self._collection_name,
@@ -129,7 +130,6 @@ class QdrantRepository:
         try:
             query_filter = None
             if document_id:
-                from qdrant_client.http.models import FieldCondition, Filter, MatchValue
                 query_filter = Filter(
                     must=[FieldCondition(key="document_id", match=MatchValue(value=document_id))]
                 )
@@ -148,6 +148,42 @@ class QdrantRepository:
                 detail=str(exc),
             ) from exc
 
+    async def search_with_filter(
+        self,
+        vector: list[float],
+        top_k: int = 5,
+        score_threshold: float | None = None,
+        document_id: str | None = None,
+        page_filter: int | None = None,
+        chunk_type_filter: str | None = None,
+    ) -> list[ScoredPoint]:
+        """Search with advanced metadata filtering."""
+        client = await self._get_client()
+        try:
+            conditions = []
+            if document_id:
+                conditions.append(FieldCondition(key="document_id", match=MatchValue(value=document_id)))
+            if page_filter is not None:
+                conditions.append(FieldCondition(key="page", match=MatchValue(value=page_filter)))
+            if chunk_type_filter:
+                conditions.append(FieldCondition(key="chunk_type", match=MatchValue(value=chunk_type_filter)))
+
+            query_filter = Filter(must=conditions) if conditions else None
+
+            results = await client.search(
+                collection_name=self._collection_name,
+                query_vector=vector,
+                limit=top_k,
+                score_threshold=score_threshold,
+                query_filter=query_filter,
+            )
+            return results
+        except Exception as exc:
+            raise QdrantError(
+                message="Filtered vector search failed",
+                detail=str(exc),
+            ) from exc
+
     async def count(self) -> int:
         client = await self._get_client()
         try:
@@ -159,6 +195,57 @@ class QdrantRepository:
         except Exception as exc:
             raise QdrantError(
                 message="Failed to count points",
+                detail=str(exc),
+            ) from exc
+
+    async def count_by_document(self, document_id: str) -> int:
+        """Count vectors belonging to a specific document."""
+        client = await self._get_client()
+        try:
+            result = await client.count(
+                collection_name=self._collection_name,
+                count_filter=Filter(
+                    must=[FieldCondition(key="document_id", match=MatchValue(value=document_id))]
+                ),
+                exact=True,
+            )
+            return result.count
+        except Exception as exc:
+            raise QdrantError(
+                message=f"Failed to count points for document '{document_id}'",
+                detail=str(exc),
+            ) from exc
+
+    async def scroll_all(self, document_id: str | None = None, limit: int = 100) -> list:
+        """Scroll through all points, optionally filtered by document. Returns payload data."""
+        client = await self._get_client()
+        try:
+            query_filter = None
+            if document_id:
+                query_filter = Filter(
+                    must=[FieldCondition(key="document_id", match=MatchValue(value=document_id))]
+                )
+
+            all_points = []
+            offset = None
+            while True:
+                points, next_offset = await client.scroll(
+                    collection_name=self._collection_name,
+                    scroll_filter=query_filter,
+                    limit=limit,
+                    offset=offset,
+                    with_payload=True,
+                    with_vectors=False,
+                )
+                all_points.extend(points)
+                if next_offset is None:
+                    break
+                offset = next_offset
+
+            return all_points
+        except Exception as exc:
+            raise QdrantError(
+                message="Failed to scroll points",
                 detail=str(exc),
             ) from exc
 

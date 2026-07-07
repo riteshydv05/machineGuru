@@ -108,7 +108,7 @@ export function useChat() {
                 return next;
               });
             },
-            onDone: (citations, timings) => {
+            onDone: (citations, timings, model) => {
               const responseTimeMs = Math.round(performance.now() - sendTime);
               setMessages((prev) => {
                 const next = prev.map((m) =>
@@ -119,6 +119,7 @@ export function useChat() {
                         responseTimeMs,
                         retrievedChunks: sources.length,
                         timings: timings ?? undefined,
+                        model: model ?? undefined,
                       }
                     : m,
                 );
@@ -152,6 +153,7 @@ export function useChat() {
                     responseTimeMs,
                     retrievedChunks: res.sources.length,
                     timings: res.timings ?? undefined,
+                    model: res.model ?? undefined,
                   }
                 : m,
             );
@@ -183,5 +185,60 @@ export function useChat() {
     sessionIdRef.current = null;
   }, []);
 
-  return { messages, isLoading, error, send, cancel, clear };
+  const regenerate = useCallback(
+    (messageId: string) => {
+      setMessages((prev) => {
+        // Find the assistant message to regenerate
+        const msgIdx = prev.findIndex((m) => m.id === messageId && m.role === "assistant");
+        if (msgIdx < 1) return prev;
+
+        // Find the preceding user message
+        const userMsg = prev[msgIdx - 1];
+        if (userMsg?.role !== "user") return prev;
+
+        // Remove the assistant message
+        const next = prev.slice(0, msgIdx);
+        saveSession(next);
+
+        // Re-send (will happen asynchronously)
+        setTimeout(() => send(userMsg.content, true), 0);
+
+        return next;
+      });
+    },
+    [send],
+  );
+
+  const deleteMessage = useCallback((messageId: string) => {
+    setMessages((prev) => {
+      const idx = prev.findIndex((m) => m.id === messageId);
+      if (idx < 0) return prev;
+
+      // If it's a user message, also remove the following assistant message
+      const msg = prev[idx]!;
+      let next: ChatMessage[];
+      if (msg.role === "user" && idx + 1 < prev.length && prev[idx + 1]!.role === "assistant") {
+        next = [...prev.slice(0, idx), ...prev.slice(idx + 2)];
+      } else if (msg.role === "assistant" && idx > 0 && prev[idx - 1]!.role === "user") {
+        next = [...prev.slice(0, idx - 1), ...prev.slice(idx + 1)];
+      } else {
+        next = prev.filter((m) => m.id !== messageId);
+      }
+
+      if (next.length > 1) saveSession(next);
+      return next;
+    });
+  }, []);
+
+  const exportMarkdown = useCallback(() => {
+    const lines = messages.map((m) => {
+      const role = m.role === "user" ? "**You**" : "**MachineGuru**";
+      const time = new Date(m.timestamp).toLocaleTimeString();
+      return `### ${role} _(${time})_\n\n${m.content}\n`;
+    });
+    const md = `# MachineGuru Chat Export\n\n_Exported: ${new Date().toISOString()}_\n\n---\n\n${lines.join("\n---\n\n")}`;
+    return md;
+  }, [messages]);
+
+  return { messages, isLoading, error, send, cancel, clear, regenerate, deleteMessage, exportMarkdown };
 }

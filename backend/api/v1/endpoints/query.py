@@ -18,6 +18,8 @@ async def query(
         text=request.text,
         top_k=request.top_k,
         document_id=request.document_id,
+        page_filter=request.page_filter,
+        chunk_type_filter=request.chunk_type_filter,
     )
     result = await use_case.execute(domain_query)
     return QueryResponse.model_validate(result.model_dump())
@@ -32,6 +34,8 @@ async def query_stream(
         text=request.text,
         top_k=request.top_k,
         document_id=request.document_id,
+        page_filter=request.page_filter,
+        chunk_type_filter=request.chunk_type_filter,
     )
 
     async def event_generator():

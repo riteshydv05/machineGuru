@@ -1,5 +1,6 @@
+import { useState } from "react";
 import { useTheme } from "@/hooks/useTheme";
-import { Moon, Sun, Monitor } from "lucide-react";
+import { Bug, Moon, Sun, Monitor } from "lucide-react";
 
 interface SettingRowProps {
   label: string;
@@ -46,6 +47,25 @@ function ThemeButton({ value, current, icon, label, onClick }: ThemeButtonProps)
   );
 }
 
+function ToggleSwitch({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <button
+      role="switch"
+      aria-checked={checked}
+      onClick={() => onChange(!checked)}
+      className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+        checked ? "bg-primary" : "bg-muted-foreground/30"
+      }`}
+    >
+      <span
+        className={`inline-block h-4 w-4 rounded-full bg-white transition-transform ${
+          checked ? "translate-x-6" : "translate-x-1"
+        }`}
+      />
+    </button>
+  );
+}
+
 const CONFIG_FIELDS = [
   {
     label: "Backend URL",
@@ -63,6 +83,11 @@ const CONFIG_FIELDS = [
     value: "multilingual-e5-small",
   },
   {
+    label: "Vision Model",
+    description: "Ollama model for image captioning (multimodal)",
+    value: "llava:7b",
+  },
+  {
     label: "Default Top-K",
     description: "Number of document chunks retrieved per query",
     value: "5",
@@ -72,10 +97,28 @@ const CONFIG_FIELDS = [
     description: "Character count per text chunk",
     value: "512",
   },
+  {
+    label: "Context Window",
+    description: "LLM context window size in tokens",
+    value: "8192",
+  },
+  {
+    label: "Max Output Tokens",
+    description: "Maximum tokens in LLM response",
+    value: "4096",
+  },
 ];
 
 export function SettingsPage() {
   const { theme, toggleTheme } = useTheme();
+  const [debugMode, setDebugMode] = useState(() => {
+    try { return localStorage.getItem("mg-debug-mode") === "true"; } catch { return false; }
+  });
+
+  const handleDebugToggle = (v: boolean) => {
+    setDebugMode(v);
+    try { localStorage.setItem("mg-debug-mode", String(v)); } catch {}
+  };
 
   return (
     <div className="max-w-2xl mx-auto space-y-8">
@@ -125,6 +168,20 @@ export function SettingsPage() {
         </SettingRow>
       </section>
 
+      {/* Developer */}
+      <section className="rounded-xl border bg-card p-6 space-y-1">
+        <h2 className="text-base font-semibold mb-4">Developer</h2>
+        <SettingRow
+          label="Debug Mode"
+          description="Show detailed pipeline information, retrieved chunks, prompts, and timing data below each response in the chat"
+        >
+          <div className="flex items-center gap-2">
+            <ToggleSwitch checked={debugMode} onChange={handleDebugToggle} />
+            {debugMode && <Bug className="h-4 w-4 text-primary" />}
+          </div>
+        </SettingRow>
+      </section>
+
       {/* System Configuration (read-only) */}
       <section className="rounded-xl border bg-card p-6 space-y-1">
         <h2 className="text-base font-semibold mb-1">System Configuration</h2>
@@ -144,11 +201,13 @@ export function SettingsPage() {
         <h2 className="text-base font-semibold">About MachineGuru</h2>
         <dl className="space-y-2 text-sm">
           {[
-            ["Version", "0.1.0"],
+            ["Version", "0.2.0"],
             ["Frontend", "React 19 + Vite + TailwindCSS"],
             ["Backend", "FastAPI + Uvicorn"],
             ["Vector DB", "Qdrant"],
             ["LLM Runtime", "Ollama"],
+            ["Retrieval", "Hybrid (Dense + BM25)"],
+            ["Multimodal", "Image extraction + Vision captioning"],
             ["Architecture", "Clean Architecture (RAG)"],
           ].map(([k, v]) => (
             <div key={String(k)} className="flex justify-between border-b pb-2 last:border-0 last:pb-0">

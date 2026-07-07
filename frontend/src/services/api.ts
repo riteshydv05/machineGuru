@@ -39,8 +39,9 @@ export const setActiveDocument = async (documentId: string): Promise<DocumentInf
   return data.document;
 };
 
-export const deleteDocument = async (documentId: string): Promise<void> => {
-  await api.delete(`/documents/${documentId}`);
+export const deleteDocument = async (documentId: string): Promise<{ deleted: boolean; filename: string }> => {
+  const { data } = await api.delete(`/documents/${documentId}`);
+  return data;
 };
 
 // ── Upload ──────────────────────────────────────────────
@@ -76,7 +77,7 @@ export const sendQuery = async (text: string, topK = 5, documentId?: string | nu
 export interface StreamCallbacks {
   onToken: (token: string) => void;
   onSources: (sources: SourceReference[]) => void;
-  onDone: (citations: Citation[] | null, timings: QueryTimings | null) => void;
+  onDone: (citations: Citation[] | null, timings: QueryTimings | null, model?: string | null) => void;
   onError: (error: string) => void;
 }
 
@@ -141,7 +142,7 @@ export const sendQueryStream = async (
             callbacks.onSources(data.sources);
             break;
           case "done":
-            callbacks.onDone(data.citations, data.timings ?? null);
+            callbacks.onDone(data.citations, data.timings ?? null, data.model ?? null);
             break;
         }
       } catch {

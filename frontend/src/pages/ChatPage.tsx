@@ -1,16 +1,31 @@
-import { useEffect, useRef } from "react";
-import { AlertCircle, Clock, Cpu, Hash, Loader2, RefreshCw, Trash2 } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import {
+  AlertCircle,
+  Bug,
+  Clock,
+  Cpu,
+  Download,
+  Hash,
+  Loader2,
+  RefreshCw,
+  Trash2,
+  Zap,
+} from "lucide-react";
 import { useChat } from "@/hooks/useChat";
 import { useDocuments } from "@/context/DocumentContext";
 import { ChatInput } from "@/components/chat/ChatInput";
 import { ChatMessage } from "@/components/chat/ChatMessage";
 import { ActiveDocumentBar } from "@/components/chat/ActiveDocumentBar";
+import { DebugPanel } from "@/components/chat/DebugPanel";
 import { Button } from "@/components/ui/button";
 
 export function ChatPage() {
-  const { messages, isLoading, error, send, cancel, clear } = useChat();
+  const { messages, isLoading, error, send, cancel, clear, regenerate, deleteMessage, exportMarkdown } = useChat();
   const { activeDocument, queryMode, refresh } = useDocuments();
   const bottomRef = useRef<HTMLDivElement>(null);
+  const [debugMode, setDebugMode] = useState(() => {
+    try { return localStorage.getItem("mg-debug-mode") === "true"; } catch { return false; }
+  });
 
   // Auto-scroll to bottom when new messages come in
   useEffect(() => {
@@ -22,11 +37,28 @@ export function ChatPage() {
     refresh();
   }, [refresh]);
 
+  const toggleDebug = () => {
+    const next = !debugMode;
+    setDebugMode(next);
+    try { localStorage.setItem("mg-debug-mode", String(next)); } catch {}
+  };
+
   const isEmpty = messages.length === 0;
 
   const handleSend = (text: string) => {
     const docId = queryMode === "current" ? activeDocument?.document_id : undefined;
     send(text, true, docId ?? null);
+  };
+
+  const handleExportMd = () => {
+    const md = exportMarkdown();
+    const blob = new Blob([md], { type: "text/markdown" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `machineguru-chat-${Date.now()}.md`;
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
   return (
@@ -39,20 +71,35 @@ export function ChatPage() {
             Ask questions about your uploaded documents
           </p>
         </div>
-        {messages.length > 0 && (
-          <div className="flex items-center gap-2">
-            {isLoading && (
-              <Button variant="outline" size="sm" onClick={cancel}>
-                <RefreshCw className="h-4 w-4 mr-1.5" />
-                Stop
+        <div className="flex items-center gap-2">
+          <Button
+            variant={debugMode ? "default" : "ghost"}
+            size="sm"
+            onClick={toggleDebug}
+            title="Toggle debug mode"
+          >
+            <Bug className="h-4 w-4" />
+          </Button>
+
+          {messages.length > 0 && (
+            <>
+              {isLoading && (
+                <Button variant="outline" size="sm" onClick={cancel}>
+                  <RefreshCw className="h-4 w-4 mr-1.5" />
+                  Stop
+                </Button>
+              )}
+              <Button variant="ghost" size="sm" onClick={handleExportMd} title="Export chat as Markdown">
+                <Download className="h-4 w-4 mr-1.5" />
+                Export
               </Button>
-            )}
-            <Button variant="ghost" size="sm" onClick={clear}>
-              <Trash2 className="h-4 w-4 mr-1.5" />
-              Clear
-            </Button>
-          </div>
-        )}
+              <Button variant="ghost" size="sm" onClick={clear}>
+                <Trash2 className="h-4 w-4 mr-1.5" />
+                Clear
+              </Button>
+            </>
+          )}
+        </div>
       </div>
 
       {/* Active Document Bar */}
@@ -93,6 +140,8 @@ export function ChatPage() {
                 "What is this document about?",
                 "Summarize the key findings",
                 "What are the main components mentioned?",
+                "Explain the wiring diagram",
+                "What maintenance procedures are described?",
               ].map((suggestion) => (
                 <button
                   key={suggestion}
@@ -108,7 +157,11 @@ export function ChatPage() {
 
         {messages.map((msg) => (
           <div key={msg.id} className="space-y-1">
-            <ChatMessage message={msg} />
+            <ChatMessage
+              message={msg}
+              onRegenerate={regenerate}
+              onDelete={deleteMessage}
+            />
 
             {/* Response metadata (only for completed assistant messages) */}
             {msg.role === "assistant" && msg.content && msg.responseTimeMs != null && (
@@ -119,6 +172,14 @@ export function ChatPage() {
                     ? `${(msg.responseTimeMs / 1000).toFixed(1)}s`
                     : `${msg.responseTimeMs}ms`}
                 </span>
+                {msg.timings?.first_token_ms != null && (
+                  <span className="flex items-center gap-1">
+                    <Zap className="h-3 w-3" />
+                    First token: {msg.timings.first_token_ms > 1000
+                      ? `${(msg.timings.first_token_ms / 1000).toFixed(1)}s`
+                      : `${msg.timings.first_token_ms}ms`}
+                  </span>
+                )}
                 {msg.retrievedChunks != null && (
                   <span className="flex items-center gap-1">
                     <Hash className="h-3 w-3" />
@@ -136,7 +197,29 @@ export function ChatPage() {
                       : `${msg.timings.llm_generation_ms}ms`}
                   </span>
                 )}
+                {msg.model && (
+                  <span className="text-muted-foreground/40">
+                    {msg.model}
+                  </span>
+                )}
+                {/* Source document pages */}
+                {msg.sources && msg.sources.length > 0 && (
+                  <span className="text-muted-foreground/40">
+                    Pages: {[...new Set(msg.sources.map(s => s.page).filter(Boolean))].join(", ")}
+                  </span>
+                )}
+                {/* Figure references */}
+                {msg.sources?.some(s => s.chunk_type === "image") && (
+                  <span className="text-muted-foreground/40">
+                    📷 {msg.sources.filter(s => s.chunk_type === "image").length} figures
+                  </span>
+                )}
               </div>
+            )}
+
+            {/* Debug panel */}
+            {debugMode && msg.role === "assistant" && msg.content && (
+              <DebugPanel message={msg} />
             )}
           </div>
         ))}

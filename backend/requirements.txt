@@ -18,6 +18,13 @@ ollama==0.4.7
 sentence-transformers==3.4.1
 torch>=2.5.0
 
+# Multimodal
+Pillow>=10.0.0
+pytesseract>=0.3.10
+
+# Hybrid Retrieval
+rank-bm25>=0.2.2
+
 # Monitoring & Benchmarking
 psutil>=6.1.0
 prometheus-client>=0.21.0
@@ -26,5 +33,3 @@ prometheus-client>=0.21.0
 python-multipart==0.0.20
 python-dotenv==1.0.1
 loguru==0.7.3
-
-

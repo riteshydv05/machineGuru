@@ -28,7 +28,7 @@ class OllamaService:
         self,
         system_prompt: str,
         user_prompt: str,
-        temperature: float = 0.1,
+        temperature: float = settings.LLM_TEMPERATURE,
     ) -> str:
         chunks: list[str] = []
         async for chunk in self.generate_stream(
@@ -43,20 +43,23 @@ class OllamaService:
         self,
         system_prompt: str,
         user_prompt: str,
-        temperature: float = 0.1,
+        temperature: float = settings.LLM_TEMPERATURE,
     ) -> AsyncGenerator[str, None]:
         logger.debug(
-            "LLM generate_stream | model={} temp={} sys_len={} user_len={}",
+            "LLM generate_stream | model={} temp={} sys_len={} user_len={} ctx={} predict={}",
             self._model,
             temperature,
             len(system_prompt),
             len(user_prompt),
+            settings.NUM_CTX,
+            settings.NUM_PREDICT,
         )
 
         await llm_limiter.acquire()
         try:
             start = time.perf_counter()
             token_count = 0
+            first_token_time: float | None = None
 
             async with memory_track("llm_generate"):
                 stream = await self._client.chat(
@@ -67,19 +70,22 @@ class OllamaService:
                     ],
                     options={
                         "temperature": temperature,
-                        "num_predict": 2048,         # Allow long responses (was default ~128)
-                        "top_p": 0.9,                # Nucleus sampling
-                        "repeat_penalty": 1.1,       # Reduce repetition
-                        "top_k": 40,                 # Vocabulary diversity
-                        "num_ctx": 4096,             # Context window size
+                        "num_predict": settings.NUM_PREDICT,
+                        "top_p": 0.9,
+                        "repeat_penalty": 1.15,
+                        "top_k": 40,
+                        "num_ctx": settings.NUM_CTX,
                     },
                     stream=True,
+                    keep_alive=settings.LLM_KEEP_ALIVE,
                 )
 
                 async for part in stream:
                     content = part.get("message", {}).get("content", "")
                     if content:
                         token_count += 1
+                        if first_token_time is None:
+                            first_token_time = time.perf_counter() - start
                         yield content
 
             elapsed = time.perf_counter() - start
@@ -91,10 +97,11 @@ class OllamaService:
 
             logger.info(
                 "LLM stream complete | model={} tokens={} time={:.2f}s "
-                "tps={:.0f} total_calls={} total_tokens={}",
+                "first_token={:.2f}s tps={:.0f} total_calls={} total_tokens={}",
                 self._model,
                 token_count,
                 elapsed,
+                first_token_time or 0.0,
                 token_count / elapsed if elapsed > 0 else 0,
                 self._generation_count,
                 self._total_tokens,

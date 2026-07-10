@@ -34,12 +34,19 @@ BOLD='\033[1m'
 NC='\033[0m'
 
 # ── Argument parsing ─────────────────────────────────────────
-MODE="prod"
+# Default mode: 'dev' — uses Vite dev server which activates the
+# /api proxy to localhost:8001. This is correct for macOS and
+# native Jetson deployments without nginx.
+#
+# Use --prod-serve only if nginx is installed and configured to
+# proxy /api/ → localhost:8001 (Jetson production with nginx).
+MODE="dev"
 START_FRONTEND=true
 START_QDRANT=true
 for arg in "$@"; do
     case $arg in
         --dev)          MODE="dev" ;;
+        --prod-serve)   MODE="prod" ;;
         --no-frontend)  START_FRONTEND=false ;;
         --no-qdrant)    START_QDRANT=false ;;
     esac
@@ -51,25 +58,38 @@ warn()  { echo -e "  ${YELLOW}⚠${NC} $1"; }
 err()   { echo -e "  ${RED}✗${NC} $1"; }
 step()  { echo -e "\n${BOLD}${BLUE}[$1]${NC} $2"; }
 
-# ── Load .env ────────────────────────────────────────────────
-if [ -f "$DIR/.env" ]; then
-    set -a
-    source "$DIR/.env"
-    set +a
-else
+# ── Load .env (safe extraction — no shell source) ─────────────
+# We deliberately do NOT use 'set -a; source .env' because that
+# exports ALL variables into the shell environment, which corrupts
+# JSON array values like CORS_ORIGINS=["url1","url2"] by stripping
+# the double-quotes. The backend (pydantic-settings) reads the
+# .env file directly and handles JSON arrays correctly.
+#
+# Instead, we extract only the simple scalar values we need for
+# shell logic using grep + sed.
+_env_get() {
+    local key="$1" default="$2"
+    local val
+    val=$(grep -E "^${key}=" "$DIR/.env" 2>/dev/null | head -1 | cut -d= -f2- | tr -d '"' | tr -d "'")
+    echo "${val:-$default}"
+}
+
+if [ ! -f "$DIR/.env" ]; then
     warn ".env not found — using defaults"
     warn "Run: cp .env.example .env  then edit it for your system"
 fi
 
 # ── Read configuration (with safe defaults) ──────────────────
-BACKEND_PORT="${BACKEND_PORT:-8001}"
-FRONTEND_PORT="${FRONTEND_PORT:-5173}"
-QDRANT_HOST="${QDRANT_HOST:-localhost}"
-QDRANT_PORT="${QDRANT_PORT:-6333}"
-QDRANT_STORAGE_PATH="${QDRANT_STORAGE_PATH:-./storage/qdrant}"
-OLLAMA_BASE_URL="${OLLAMA_BASE_URL:-http://localhost:11434}"
-LOG_DIR="${LOG_DIR:-./logs}"
-UPLOAD_DIR="${UPLOAD_DIR:-./storage/uploads}"
+BACKEND_PORT="$(_env_get BACKEND_PORT 8001)"
+FRONTEND_PORT="$(_env_get FRONTEND_PORT 5173)"
+QDRANT_HOST="$(_env_get QDRANT_HOST localhost)"
+QDRANT_PORT="$(_env_get QDRANT_PORT 6333)"
+QDRANT_LOG_LEVEL="$(_env_get QDRANT_LOG_LEVEL INFO)"
+QDRANT_STORAGE_PATH="$(_env_get QDRANT_STORAGE_PATH ./storage/qdrant)"
+OLLAMA_BASE_URL="$(_env_get OLLAMA_BASE_URL http://localhost:11434)"
+LLM_MODEL="$(_env_get LLM_MODEL llama3.2:1b)"
+LOG_DIR="$(_env_get LOG_DIR ./logs)"
+UPLOAD_DIR="$(_env_get UPLOAD_DIR ./storage/uploads)"
 
 # Resolve relative paths to absolute
 [[ "$QDRANT_STORAGE_PATH" != /* ]] && QDRANT_STORAGE_PATH="$DIR/$QDRANT_STORAGE_PATH"
@@ -150,7 +170,15 @@ if [ -f "$BACKEND_PID_FILE" ]; then
 fi
 
 # Fallback: kill by port (works even if PID file is stale)
-if command -v fuser &>/dev/null; then
+# macOS has BSD fuser which does not support -k PORT/tcp — use lsof on Darwin
+if [[ "$(uname -s)" == "Darwin" ]]; then
+    # macOS: use lsof
+    if command -v lsof &>/dev/null; then
+        PIDS=$(lsof -t -i :"$BACKEND_PORT" 2>/dev/null || true)
+        [ -n "$PIDS" ] && kill $PIDS 2>/dev/null && ok "Cleared port $BACKEND_PORT" || true
+    fi
+elif command -v fuser &>/dev/null; then
+    # Linux: fuser supports -k PORT/tcp
     fuser -k "${BACKEND_PORT}/tcp" 2>/dev/null && ok "Cleared port $BACKEND_PORT" || true
 elif command -v lsof &>/dev/null; then
     PIDS=$(lsof -t -i :"$BACKEND_PORT" 2>/dev/null || true)
@@ -263,16 +291,20 @@ echo "$BACKEND_PID" > "$BACKEND_PID_FILE"
 
 cd "$DIR"
 
-# Wait up to 30 seconds for backend to be ready
+# Wait up to 30 seconds for backend to respond with HTTP 200.
+# A 503 means an old shutting-down instance is still on the port — keep waiting.
 for i in $(seq 1 30); do
-    if curl -sf --max-time 3 "http://localhost:$BACKEND_PORT/api/v1/health" > /dev/null 2>&1; then
+    HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 3 "http://localhost:$BACKEND_PORT/api/v1/health" 2>/dev/null || echo "000")
+    if [ "$HTTP_CODE" = "200" ]; then
         ok "Backend ready (pid $BACKEND_PID)"
         break
     fi
     if [ "$i" -eq 30 ]; then
-        err "Backend failed to start after 30s"
+        err "Backend failed to start after 30s (last HTTP status: $HTTP_CODE)"
         err "Check: $LOG_DIR/backend.log"
-        tail -30 "$LOG_DIR/backend.log" 2>/dev/null | sed 's/^/    /'
+        # Use cat + head to avoid macOS sed crash with ANSI color codes in logs
+        echo "  Last 30 lines of backend.log:"
+        cat "$LOG_DIR/backend.log" 2>/dev/null | tail -30 | while IFS= read -r line; do echo "    $line"; done
         exit 1
     fi
     sleep 1
@@ -289,18 +321,35 @@ if [ "$START_FRONTEND" = true ]; then
     cd "$DIR/frontend"
 
     if [ "$MODE" = "dev" ]; then
+        # ── Vite dev server (DEFAULT) ─────────────────────────
+        # Vite's dev server activates the /api proxy defined in
+        # vite.config.ts, forwarding all /api/* requests to the
+        # FastAPI backend at localhost:$BACKEND_PORT.
+        # This is the correct mode for macOS and native Jetson
+        # without a separately configured nginx reverse proxy.
         npm run dev -- --port "$FRONTEND_PORT" > "$LOG_DIR/frontend.log" 2>&1 &
+        ok "Starting Vite dev server (with /api proxy → localhost:$BACKEND_PORT)"
     else
-        # Production: serve the built dist with a simple static server
+        # ── Production static serve (--prod-serve only) ───────
+        # Use this ONLY when nginx is configured to proxy /api/
+        # to the backend (e.g., Jetson with nginx installed).
+        # Without nginx, API calls from the built app will fail
+        # because the static file server has no proxy capability.
         if [ -d "$DIR/frontend/dist" ]; then
-            # Use npx serve if available, otherwise fallback to python
-            if command -v npx &>/dev/null; then
+            warn "Using static file server — ensure nginx proxies /api/ to port $BACKEND_PORT"
+            if command -v nginx &>/dev/null; then
+                # nginx is available — start it with the project config
+                nginx -c "$DIR/frontend/nginx.conf" -g "daemon off;" > "$LOG_DIR/frontend.log" 2>&1 &
+            elif command -v npx &>/dev/null; then
+                warn "nginx not found — using npx serve (API calls will NOT work without a proxy!)"
                 npx --yes serve dist -l "$FRONTEND_PORT" > "$LOG_DIR/frontend.log" 2>&1 &
             else
-                python3 -m http.server "$FRONTEND_PORT" --directory "$DIR/frontend/dist" > "$LOG_DIR/frontend.log" 2>&1 &
+                warn "Neither nginx nor npx found — falling back to Vite dev server"
+                npm run dev -- --port "$FRONTEND_PORT" > "$LOG_DIR/frontend.log" 2>&1 &
             fi
         else
-            warn "Frontend dist not built. Running dev server instead."
+            warn "Frontend dist not built — running Vite dev server instead"
+            warn "Build first with: cd frontend && npm run build"
             npm run dev -- --port "$FRONTEND_PORT" > "$LOG_DIR/frontend.log" 2>&1 &
         fi
     fi
@@ -309,14 +358,14 @@ if [ "$START_FRONTEND" = true ]; then
     echo "$FRONTEND_PID" > "$FRONTEND_PID_FILE"
     cd "$DIR"
 
-    # Wait up to 15 seconds
-    for i in $(seq 1 15); do
+    # Wait up to 20 seconds (Vite needs a moment to compile)
+    for i in $(seq 1 20); do
         if curl -sf --max-time 2 "http://localhost:$FRONTEND_PORT" > /dev/null 2>&1; then
-            ok "Frontend ready (pid $FRONTEND_PID)"
+            ok "Frontend ready (pid $FRONTEND_PID) → http://localhost:$FRONTEND_PORT"
             break
         fi
-        if [ "$i" -eq 15 ]; then
-            warn "Frontend not yet ready — check $LOG_DIR/frontend.log"
+        if [ "$i" -eq 20 ]; then
+            warn "Frontend not yet ready after 20s — check $LOG_DIR/frontend.log"
         fi
         sleep 1
     done

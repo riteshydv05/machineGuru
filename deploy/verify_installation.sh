@@ -142,8 +142,8 @@ UPLOAD_RESP=$(curl -s --max-time 60 \
 
 rm -f "$TEST_PDF"
 
-if echo "$UPLOAD_RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); exit(0 if d.get('status') in ('ok','success') or d.get('chunks_ingested',0) > 0 else 1)" 2>/dev/null; then
-    CHUNKS=$(echo "$UPLOAD_RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('chunks_ingested', d.get('chunks','?')))" 2>/dev/null || echo "?")
+if echo "$UPLOAD_RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); exit(0 if d.get('status') in ('ok','success') or d.get('chunk_count',0) > 0 else 1)" 2>/dev/null; then
+    CHUNKS=$(echo "$UPLOAD_RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('chunk_count', '?'))" 2>/dev/null || echo "?")
     DOC_ID=$(echo "$UPLOAD_RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('document_id',''))" 2>/dev/null || echo "")
     pass "Upload + ingest successful ($CHUNKS chunks)"
 else
@@ -156,7 +156,7 @@ fi
 step "5. RAG Query"
 # ────────────────────────────────────────────────────────────
 
-QUERY_PAYLOAD='{"query": "What are the safety procedures for maintenance?", "stream": false}'
+QUERY_PAYLOAD='{"text": "What are the safety procedures for maintenance?", "stream": false}'
 QUERY_RESP=$(curl -s --max-time 120 \
     -X POST "$BACKEND_URL/api/v1/query" \
     -H "Content-Type: application/json" \
@@ -181,7 +181,7 @@ STREAM_RESP=$(curl -s --max-time 30 -N \
     -X POST "$BACKEND_URL/api/v1/query/stream" \
     -H "Content-Type: application/json" \
     -H "Accept: text/event-stream" \
-    -d '{"query": "What is preventive maintenance?", "stream": true}' \
+    -d '{"text": "What is preventive maintenance?", "stream": true}' \
     2>/dev/null | head -c 500 || echo "")
 
 if echo "$STREAM_RESP" | grep -q "data:"; then

@@ -1,35 +1,57 @@
-# Core
+# ============================================================
+# MachineGuru Backend — Python Dependencies
+# ============================================================
+# Target: Ubuntu 20.04/22.04, Python 3.10+, ARM64 (Jetson Orin)
+#
+# ⚠  IMPORTANT — PyTorch on NVIDIA Jetson:
+#    Do NOT install PyTorch from PyPI on Jetson Orin.
+#    NVIDIA provides JetPack-specific wheels with CUDA support.
+#    Run deploy/jetson_setup.sh first, which installs the
+#    correct wheel from the NVIDIA Jetson PyPI index.
+#    On x86_64 development machines, pip install works normally.
+# ============================================================
+
+# ── Core Web Framework ──────────────────────────────────────
 fastapi==0.115.6
 uvicorn[standard]==0.34.0
 pydantic==2.10.4
 pydantic-settings==2.7.1
 sse-starlette==2.2.1
 
-
-# Vector Database
+# ── Vector Database ─────────────────────────────────────────
 qdrant-client==1.13.2
+httpx>=0.28.0,<1.0.0
 
-# Document Processing
+# ── Document Processing ──────────────────────────────────────
 pymupdf==1.25.3
 python-docx==1.1.2
 
-# AI / ML
+# ── AI / ML ──────────────────────────────────────────────────
 ollama==0.4.7
 sentence-transformers==3.4.1
-torch>=2.5.0
 
-# Multimodal
-Pillow>=10.0.0
-pytesseract>=0.3.10
+# PyTorch — see note above for Jetson ARM64 installation.
+# On x86_64 development machines this resolves normally.
+# On Jetson: deploy/jetson_setup.sh installs the GPU-enabled wheel first.
+torch>=2.1.0,<3.0.0
 
-# Hybrid Retrieval
-rank-bm25>=0.2.2
+# ── Multimodal / OCR ─────────────────────────────────────────
+Pillow>=10.0.0,<12.0.0
+pytesseract>=0.3.10,<1.0.0
 
-# Monitoring & Benchmarking
-psutil>=6.1.0
-prometheus-client>=0.21.0
+# ── Hybrid Retrieval ─────────────────────────────────────────
+rank-bm25>=0.2.2,<1.0.0
 
-# Utilities
+# ── Monitoring & Benchmarking ────────────────────────────────
+psutil>=6.1.0,<7.0.0
+prometheus-client>=0.21.0,<1.0.0
+
+# ── Utilities ────────────────────────────────────────────────
 python-multipart==0.0.20
 python-dotenv==1.0.1
 loguru==0.7.3
+
+# ── Testing (development only — not installed in production) ─
+# pytest>=8.0.0
+# pytest-asyncio>=0.24.0
+# httpx>=0.28.0   (already above, needed for TestClient)

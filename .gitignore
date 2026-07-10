@@ -1,50 +1,124 @@
+# ============================================================
+# MachineGuru — .gitignore
+# ============================================================
+
+# ------------------------------------------------------------
 # Python
+# ------------------------------------------------------------
 __pycache__/
+**/__pycache__/
 *.py[cod]
+*.pyo
+*.pyd
+*.egg
 *.egg-info/
+*.whl
+.eggs/
 dist/
 build/
-*.egg
 .venv/
 venv/
-*.whl
+env/
+.env/
+*.so
+pip-wheel-metadata/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
 
-# Environment
+# ------------------------------------------------------------
+# Environment files (never commit secrets)
+# ------------------------------------------------------------
 .env
 .env.local
+.env.*.local
+.env.production
+.env.jetson
 
-# IDE
+# ------------------------------------------------------------
+# Storage / Runtime data (never commit uploads or databases)
+# ------------------------------------------------------------
+storage/
+!storage/**/.gitkeep
+
+# Qdrant binary, data, and snapshots
+qdrant_bin/
+qdrant_storage/
+snapshots/
+
+# Upload files
+uploads/
+backend/uploads/
+
+# Logs
+logs/
+backend/logs/
+*.log
+
+# Cache
+cache/
+.cache/
+__embeddings_cache__/
+
+# Temporary / lock files
+*.pid
+*.lock
+.qdrant-initialized
+
+# ------------------------------------------------------------
+# Node / Frontend
+# ------------------------------------------------------------
+node_modules/
+frontend/node_modules/
+frontend/dist/
+frontend/dist-node/
+frontend/.vite/
+*.tsbuildinfo
+tsconfig.tsbuildinfo
+tsconfig.node.tsbuildinfo
+
+# ------------------------------------------------------------
+# IDE & Editor
+# ------------------------------------------------------------
 .idea/
 .vscode/
 *.swp
 *.swo
 *~
+.project
+.classpath
+*.iml
+.factorypath
 
+# ------------------------------------------------------------
 # OS
+# ------------------------------------------------------------
 .DS_Store
+.DS_Store?
+._*
+.Spotlight-V*
+.Trashes
+ehthumbs.db
 Thumbs.db
+desktop.ini
 
-# Node
-node_modules/
-frontend/dist/
-
-# Logs
-*.log
-
-# Uploads
-uploads/
-
+# ------------------------------------------------------------
 # Docker
+# ------------------------------------------------------------
 .docker/
 
-# Qdrant binary and local data (large files, not needed in git)
-qdrant_bin/
-qdrant_storage/
-snapshots/
-
-# Logs directory
-logs/
-
-# Backups
+# ------------------------------------------------------------
+# Backup / Offline exports
+# ------------------------------------------------------------
 backups/
 offline/
+
+# ------------------------------------------------------------
+# Misc artifacts
+# ------------------------------------------------------------
+backend/package-lock.json
+config/*.local.*

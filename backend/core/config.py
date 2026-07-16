@@ -56,6 +56,18 @@ class Settings(BaseSettings):
     # Multimodal / Vision
     ENABLE_MULTIMODAL: bool = True
 
+    # ── Hardware ─────────────────────────────────────────────
+    DEVICE: str = "cpu"
+    USE_FP16: bool = False
+    USE_FLASH_ATTENTION: bool = False
+    QUANTIZE: str = "dynamic"
+
+    # ── Embedding ────────────────────────────────────────────
+    # When True, use Ollama's /api/embeddings instead of SentenceTransformers.
+    # Useful when SentenceTransformers dependencies (tzdata, pandas) are broken.
+    # WARNING: Switching requires re-indexing all documents.
+    USE_OLLAMA_EMBEDDINGS: bool = False
+
     # Hybrid Retrieval
     BM25_WEIGHT: float = 0.3
     DENSE_WEIGHT: float = 0.7

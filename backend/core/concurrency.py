@@ -24,6 +24,13 @@ class RateLimiter:
         self._completed += 1
         self._sem.release()
 
+    async def __aenter__(self) -> "RateLimiter":
+        await self.acquire()
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+        self.release()
+
     @property
     def stats(self) -> dict:
         return {

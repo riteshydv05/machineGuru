@@ -5,6 +5,7 @@
 # Usage: ./deploy/verify_installation.sh
 #
 # Performs an end-to-end functional test of all components:
+#   ✓ Environment detection summary
 #   ✓ Backend health endpoint
 #   ✓ Qdrant reachable + collection exists
 #   ✓ Ollama reachable + model available
@@ -15,21 +16,27 @@
 #   ✓ Log files created
 #   ✓ Stats endpoint
 #   ✓ Environment validated
+#   ✓ Python dependency imports
 #
-# All tests are non-destructive. A test PDF is uploaded and
+# All tests are non-destructive. A test file is uploaded and
 # immediately deleted after the test completes.
+#
+# Exit codes:
+#   0  All checks passed (PASS)
+#   1  One or more checks failed (FAIL)
 # ============================================================
 set -uo pipefail
 
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-BOLD='\033[1m'
-NC='\033[0m'
-
+# ── Source shared library ────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+if [ -f "$SCRIPT_DIR/deploy_lib.sh" ]; then
+    # shellcheck source=deploy_lib.sh
+    source "$SCRIPT_DIR/deploy_lib.sh"
+else
+    RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
+    BLUE='\033[0;34m'; BOLD='\033[1m'; NC='\033[0m'
+    PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+fi
 
 # Load .env
 if [ -f "$PROJECT_ROOT/.env" ]; then
@@ -47,15 +54,24 @@ FAILED=0
 
 step()  { echo -e "\n${BOLD}${BLUE}── $1${NC}"; }
 pass()  { PASSED=$((PASSED + 1)); echo -e "  ${GREEN}✓${NC} $1"; }
-fail()  { FAILED=$((FAILED + 1)); echo -e "  ${RED}✗${NC} $1"; }
+vfail() { FAILED=$((FAILED + 1)); echo -e "  ${RED}✗${NC} $1"; }
 warn()  { echo -e "  ${YELLOW}⚠${NC} $1"; }
 info()  { echo -e "  ℹ $1"; }
 
+# ── Log output ───────────────────────────────────────────────
+mkdir -p "$PROJECT_ROOT/logs"
+VER_LOG="$PROJECT_ROOT/logs/healthcheck.log"
+
 echo ""
 echo "============================================================"
-echo "  MachineGuru — Installation Verification"
+echo -e "${BOLD}  MachineGuru — Installation Verification${NC}"
 echo "  $(date '+%Y-%m-%d %H:%M:%S')"
 echo "============================================================"
+
+# ── Environment summary ─────────────────────────────────────
+if type print_env_summary &>/dev/null; then
+    print_env_summary
+fi
 
 # ────────────────────────────────────────────────────────────
 step "1. Backend Health"
@@ -66,7 +82,7 @@ if [ -n "$HEALTH_RESPONSE" ]; then
     STATUS=$(echo "$HEALTH_RESPONSE" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('status','unknown'))" 2>/dev/null || echo "unknown")
     pass "Backend responds at $BACKEND_URL (status: $STATUS)"
 else
-    fail "Backend not reachable at $BACKEND_URL"
+    vfail "Backend not reachable at $BACKEND_URL"
     echo ""
     echo "  Start backend with: ./start.sh"
     echo "  Then re-run this script."
@@ -90,7 +106,7 @@ if curl -sf --max-time "$TIMEOUT" "$QDRANT_URL/healthz" &>/dev/null; then
         warn "Qdrant collection '$COLLECTION' not found — will be auto-created on first use"
     fi
 else
-    fail "Qdrant not reachable at $QDRANT_URL"
+    vfail "Qdrant not reachable at $QDRANT_URL"
 fi
 
 # ────────────────────────────────────────────────────────────
@@ -109,14 +125,41 @@ if curl -sf --max-time "$TIMEOUT" "$OLLAMA_BASE_URL" &>/dev/null; then
         FAILED=$((FAILED + 1))
     fi
 else
-    fail "Ollama not reachable at $OLLAMA_BASE_URL"
+    vfail "Ollama not reachable at $OLLAMA_BASE_URL"
 fi
 
 # ────────────────────────────────────────────────────────────
-step "4. File Upload"
+step "4. Python Dependency Imports"
 # ────────────────────────────────────────────────────────────
 
-# Create a minimal test PDF using Python
+VENV_DIR="$PROJECT_ROOT/backend/.venv"
+if [ -f "$VENV_DIR/bin/activate" ]; then
+    # shellcheck disable=SC1091
+    source "$VENV_DIR/bin/activate" 2>/dev/null || true
+fi
+
+IMPORT_OK=true
+for pkg in "fastapi" "uvicorn" "pydantic" "qdrant_client" "loguru" "torch" "ollama"; do
+    if python3 -c "import $pkg" 2>/dev/null; then
+        pass "import $pkg"
+    else
+        vfail "import $pkg — FAILED"
+        IMPORT_OK=false
+    fi
+done
+
+# sentence-transformers (soft check)
+if python3 -c "import sentence_transformers" 2>/dev/null; then
+    pass "import sentence_transformers"
+else
+    warn "import sentence_transformers — not available (USE_OLLAMA_EMBEDDINGS=true as fallback)"
+fi
+
+# ────────────────────────────────────────────────────────────
+step "5. File Upload"
+# ────────────────────────────────────────────────────────────
+
+# Create a minimal test document
 TEST_PDF="/tmp/machineguru_test_$$.txt"
 cat > "$TEST_PDF" << 'EOF'
 MachineGuru Verification Test Document
@@ -153,7 +196,7 @@ else
 fi
 
 # ────────────────────────────────────────────────────────────
-step "5. RAG Query"
+step "6. RAG Query"
 # ────────────────────────────────────────────────────────────
 
 QUERY_PAYLOAD='{"text": "What are the safety procedures for maintenance?", "stream": false}'
@@ -174,7 +217,7 @@ else
 fi
 
 # ────────────────────────────────────────────────────────────
-step "6. Streaming Endpoint"
+step "7. Streaming Endpoint"
 # ────────────────────────────────────────────────────────────
 
 STREAM_RESP=$(curl -s --max-time 30 -N \
@@ -192,7 +235,7 @@ else
 fi
 
 # ────────────────────────────────────────────────────────────
-step "7. Stats Endpoint"
+step "8. Stats Endpoint"
 # ────────────────────────────────────────────────────────────
 
 STATS_RESP=$(curl -s --max-time "$TIMEOUT" "$BACKEND_URL/api/v1/stats" 2>/dev/null || echo "")
@@ -204,7 +247,7 @@ else
 fi
 
 # ────────────────────────────────────────────────────────────
-step "8. Log Files"
+step "9. Log Files"
 # ────────────────────────────────────────────────────────────
 
 LOG_DIR="${LOG_DIR:-./logs}"
@@ -221,7 +264,7 @@ else
 fi
 
 # ────────────────────────────────────────────────────────────
-step "9. Storage Directories"
+step "10. Storage Directories"
 # ────────────────────────────────────────────────────────────
 
 UPLOAD_DIR_PATH="${UPLOAD_DIR:-./storage/uploads}"
@@ -231,7 +274,7 @@ UPLOAD_DIR_PATH="${UPLOAD_DIR:-./storage/uploads}"
 [ -d "$PROJECT_ROOT/storage/qdrant" ] && pass "Qdrant storage directory" || warn "storage/qdrant/ missing"
 
 # ────────────────────────────────────────────────────────────
-step "10. Environment Variables"
+step "11. Environment Variables"
 # ────────────────────────────────────────────────────────────
 
 REQUIRED=(OLLAMA_BASE_URL LLM_MODEL QDRANT_HOST QDRANT_PORT QDRANT_COLLECTION UPLOAD_DIR LOG_DIR)
@@ -252,18 +295,21 @@ echo ""
 echo "============================================================"
 TOTAL=$((PASSED + FAILED))
 if [ "$FAILED" -eq 0 ]; then
-    echo -e "${GREEN}${BOLD}  ✅  All $PASSED/$TOTAL checks passed — MachineGuru is ready!${NC}"
+    echo -e "${GREEN}${BOLD}  ✅  PASS — All $PASSED/$TOTAL checks passed — MachineGuru is ready!${NC}"
     echo ""
     echo "  Access the application:"
     echo "  → Backend API:  $BACKEND_URL/docs"
     echo "  → Frontend:     http://localhost:${FRONTEND_PORT:-5173}"
     echo "  → Metrics:      $BACKEND_URL/metrics"
 else
-    echo -e "${YELLOW}${BOLD}  ⚠   $PASSED/$TOTAL passed, $FAILED failed/warned${NC}"
+    echo -e "${YELLOW}${BOLD}  ⚠   PARTIAL — $PASSED/$TOTAL passed, $FAILED failed/warned${NC}"
     echo ""
     echo "  Some checks failed. Review warnings above."
     echo "  If services are not running, start with: ./start.sh"
 fi
 echo "============================================================"
+
+echo "" >> "$VER_LOG"
+echo "── Verification $(date '+%Y-%m-%d %H:%M:%S'): passed=$PASSED failed=$FAILED ──" >> "$VER_LOG"
 
 [ "$FAILED" -gt 0 ] && exit 1 || exit 0

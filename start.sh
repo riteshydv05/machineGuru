@@ -12,26 +12,34 @@
 # Service startup order:
 #   1. Validate environment
 #   2. Create storage directories
-#   3. Start Qdrant
-#   4. Wait for Qdrant to be ready
-#   5. Start Backend (FastAPI/Uvicorn)
-#   6. Wait for Backend to be ready
-#   7. Verify Ollama is reachable
-#   8. Start Frontend (optional)
-#   9. Print summary
+#   3. Auto-start Ollama if installed but stopped
+#   4. Start Qdrant
+#   5. Wait for Qdrant to be ready
+#   6. Start Backend (FastAPI/Uvicorn)
+#   7. Wait for Backend to be ready
+#   8. Verify Ollama is reachable
+#   9. Start Frontend (optional)
+#  10. Print summary
 # ============================================================
 set -uo pipefail
 
 # ── Project root (always absolute, never relies on cwd) ──────
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# ── Color codes ──────────────────────────────────────────────
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-BOLD='\033[1m'
-NC='\033[0m'
+# ── Source shared library ────────────────────────────────────
+DEPLOY_LIB_DIR="$DIR/deploy"
+if [ -f "$DIR/deploy/deploy_lib.sh" ]; then
+    # shellcheck source=deploy/deploy_lib.sh
+    source "$DIR/deploy/deploy_lib.sh"
+else
+    # Minimal fallback if deploy_lib.sh is missing
+    RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
+    BLUE='\033[0;34m'; BOLD='\033[1m'; NC='\033[0m'
+    ok()   { echo -e "  ${GREEN}✓${NC} $1"; }
+    warn() { echo -e "  ${YELLOW}⚠${NC} $1"; }
+    err()  { echo -e "  ${RED}✗${NC} $1"; }
+    step() { echo -e "\n${BOLD}${BLUE}[$1]${NC} $2"; }
+fi
 
 # ── Argument parsing ─────────────────────────────────────────
 # Default mode: 'dev' — uses Vite dev server which activates the
@@ -51,12 +59,6 @@ for arg in "$@"; do
         --no-qdrant)    START_QDRANT=false ;;
     esac
 done
-
-# ── Helpers ──────────────────────────────────────────────────
-ok()    { echo -e "  ${GREEN}✓${NC} $1"; }
-warn()  { echo -e "  ${YELLOW}⚠${NC} $1"; }
-err()   { echo -e "  ${RED}✗${NC} $1"; }
-step()  { echo -e "\n${BOLD}${BLUE}[$1]${NC} $2"; }
 
 # ── Load .env (safe extraction — no shell source) ─────────────
 # We deliberately do NOT use 'set -a; source .env' because that
@@ -113,13 +115,17 @@ echo "════════════════════════�
 # ────────────────────────────────────────────────────────────
 # STEP 1: Validate environment
 # ────────────────────────────────────────────────────────────
-step "1/7" "Validating environment"
+step "1/8" "Validating environment"
 
 ERRORS=0
 
-# Check Python venv
-if [ ! -f "$DIR/backend/.venv/bin/activate" ]; then
-    err "Python venv not found at backend/.venv/"
+# Check Python — either venv or system
+if [ -f "$DIR/backend/.venv/bin/activate" ]; then
+    ok "Python venv found at backend/.venv/"
+elif command -v python3 &>/dev/null && python3 -c "import fastapi" 2>/dev/null; then
+    ok "Python with dependencies found (user/system packages)"
+else
+    err "Python environment not found"
     err "Run: ./deploy/install.sh"
     ERRORS=$((ERRORS + 1))
 fi
@@ -142,7 +148,7 @@ ok "Environment validated"
 # ────────────────────────────────────────────────────────────
 # STEP 2: Create required directories
 # ────────────────────────────────────────────────────────────
-step "2/7" "Creating directories"
+step "2/8" "Creating directories"
 
 mkdir -p "$LOG_DIR"
 mkdir -p "$UPLOAD_DIR"
@@ -156,7 +162,7 @@ ok "Directories ready"
 # ────────────────────────────────────────────────────────────
 # STEP 3: Kill stale processes
 # ────────────────────────────────────────────────────────────
-step "3/7" "Cleaning up old processes"
+step "3/8" "Cleaning up old processes"
 
 # Stop old backend using PID file first, then fallback to port
 BACKEND_PID_FILE="$PID_DIR/backend.pid"
@@ -175,14 +181,14 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
     # macOS: use lsof
     if command -v lsof &>/dev/null; then
         PIDS=$(lsof -t -i :"$BACKEND_PORT" 2>/dev/null || true)
-        [ -n "$PIDS" ] && kill $PIDS 2>/dev/null && ok "Cleared port $BACKEND_PORT" || true
+        [ -n "$PIDS" ] && kill -9 $PIDS 2>/dev/null && ok "Cleared port $BACKEND_PORT" || true
     fi
 elif command -v fuser &>/dev/null; then
     # Linux: fuser supports -k PORT/tcp
     fuser -k "${BACKEND_PORT}/tcp" 2>/dev/null && ok "Cleared port $BACKEND_PORT" || true
 elif command -v lsof &>/dev/null; then
     PIDS=$(lsof -t -i :"$BACKEND_PORT" 2>/dev/null || true)
-    [ -n "$PIDS" ] && kill $PIDS 2>/dev/null && ok "Cleared port $BACKEND_PORT" || true
+    [ -n "$PIDS" ] && kill -9 $PIDS 2>/dev/null && ok "Cleared port $BACKEND_PORT" || true
 fi
 
 # Stop old Qdrant
@@ -199,9 +205,68 @@ fi
 sleep 1
 
 # ────────────────────────────────────────────────────────────
-# STEP 4: Start Qdrant
+# STEP 4: Auto-start Ollama if installed but not running
 # ────────────────────────────────────────────────────────────
-step "4/7" "Starting Qdrant (port $QDRANT_PORT)"
+step "4/8" "Checking Ollama"
+
+# Use deploy_lib if available, otherwise basic check
+if type detect_ollama &>/dev/null; then
+    OLLAMA_STATUS="$(detect_ollama)"
+    case "$OLLAMA_STATUS" in
+        INSTALLED_RUNNING)
+            DETECTED_OLLAMA_URL="$(detect_ollama_url 2>/dev/null || echo "$OLLAMA_BASE_URL")"
+            ok "Ollama running at $DETECTED_OLLAMA_URL"
+            # Update OLLAMA_BASE_URL if auto-detected URL differs
+            if [ "$DETECTED_OLLAMA_URL" != "$OLLAMA_BASE_URL" ]; then
+                OLLAMA_BASE_URL="$DETECTED_OLLAMA_URL"
+                warn "Using auto-detected Ollama URL: $OLLAMA_BASE_URL"
+            fi
+            ;;
+        INSTALLED_STOPPED)
+            warn "Ollama installed but not running — attempting to start..."
+            if try_start_ollama; then
+                DETECTED_OLLAMA_URL="$(detect_ollama_url 2>/dev/null || echo "$OLLAMA_BASE_URL")"
+                ok "Ollama started at $DETECTED_OLLAMA_URL"
+                OLLAMA_BASE_URL="$DETECTED_OLLAMA_URL"
+            else
+                warn "Could not start Ollama automatically"
+                warn "Start manually: ollama serve"
+                warn "Continuing — backend will retry Ollama on each request"
+            fi
+            ;;
+        MISSING)
+            warn "Ollama not installed"
+            warn "Install: curl -fsSL https://ollama.com/install.sh | sh"
+            warn "Continuing — backend will fail gracefully on LLM requests"
+            ;;
+    esac
+else
+    # Fallback if deploy_lib is not available
+    if curl -sf --max-time 5 "$OLLAMA_BASE_URL" > /dev/null 2>&1; then
+        ok "Ollama reachable at $OLLAMA_BASE_URL"
+    else
+        warn "Ollama not reachable at $OLLAMA_BASE_URL"
+        warn "Start Ollama: ollama serve"
+        warn "Continuing — backend will retry Ollama on each request"
+    fi
+fi
+
+# Verify model availability
+if curl -sf --max-time 5 "$OLLAMA_BASE_URL" > /dev/null 2>&1; then
+    LLM_MODEL_NAME="${LLM_MODEL:-llama3.2:1b}"
+    TAGS=$(curl -s --max-time 5 "$OLLAMA_BASE_URL/api/tags" 2>/dev/null || echo "{}")
+    if echo "$TAGS" | python3 -c "import sys,json; d=json.load(sys.stdin); names=[m['name'] for m in d.get('models',[])]; exit(0 if any('${LLM_MODEL_NAME}' in n for n in names) else 1)" 2>/dev/null; then
+        ok "Model '$LLM_MODEL_NAME' is loaded"
+    else
+        warn "Model '$LLM_MODEL_NAME' not found in Ollama"
+        warn "Run in another terminal: ollama pull $LLM_MODEL_NAME"
+    fi
+fi
+
+# ────────────────────────────────────────────────────────────
+# STEP 5: Start Qdrant
+# ────────────────────────────────────────────────────────────
+step "5/8" "Starting Qdrant (port $QDRANT_PORT)"
 
 if [ "$START_QDRANT" = true ]; then
     QDRANT__STORAGE__STORAGE_PATH="$QDRANT_STORAGE_PATH" \
@@ -237,33 +302,16 @@ else
 fi
 
 # ────────────────────────────────────────────────────────────
-# STEP 5: Verify Ollama
-# ────────────────────────────────────────────────────────────
-step "5/7" "Verifying Ollama"
-
-if curl -sf --max-time 5 "$OLLAMA_BASE_URL" > /dev/null 2>&1; then
-    ok "Ollama reachable at $OLLAMA_BASE_URL"
-    LLM_MODEL_NAME="${LLM_MODEL:-llama3.2:1b}"
-    TAGS=$(curl -s --max-time 5 "$OLLAMA_BASE_URL/api/tags" 2>/dev/null || echo "{}")
-    if echo "$TAGS" | python3 -c "import sys,json; d=json.load(sys.stdin); names=[m['name'] for m in d.get('models',[])]; exit(0 if any('${LLM_MODEL_NAME}' in n for n in names) else 1)" 2>/dev/null; then
-        ok "Model '$LLM_MODEL_NAME' is loaded"
-    else
-        warn "Model '$LLM_MODEL_NAME' not found in Ollama"
-        warn "Run in another terminal: ollama pull $LLM_MODEL_NAME"
-    fi
-else
-    warn "Ollama not reachable at $OLLAMA_BASE_URL"
-    warn "Start Ollama: ollama serve"
-    warn "Continuing — backend will retry Ollama on each request"
-fi
-
-# ────────────────────────────────────────────────────────────
 # STEP 6: Start Backend
 # ────────────────────────────────────────────────────────────
-step "6/7" "Starting backend (port $BACKEND_PORT)"
+step "6/8" "Starting backend (port $BACKEND_PORT)"
 
 cd "$DIR/backend"
-source .venv/bin/activate
+
+# Activate venv if it exists, otherwise rely on user/system packages
+if [ -f .venv/bin/activate ]; then
+    source .venv/bin/activate
+fi
 
 # Set LOG_DIR and UPLOAD_DIR as absolute paths for the backend process
 export LOG_DIR="$LOG_DIR"
@@ -300,8 +348,8 @@ for i in $(seq 1 30); do
         break
     fi
     if [ "$i" -eq 30 ]; then
-        err "Backend failed to start after 30s (last HTTP status: $HTTP_CODE)"
-        err "Check: $LOG_DIR/backend.log"
+        fail "Backend failed to start after 30s (last HTTP status: $HTTP_CODE)"
+        fail "Check: $LOG_DIR/backend.log"
         # Use cat + head to avoid macOS sed crash with ANSI color codes in logs
         echo "  Last 30 lines of backend.log:"
         cat "$LOG_DIR/backend.log" 2>/dev/null | tail -30 | while IFS= read -r line; do echo "    $line"; done
@@ -313,7 +361,7 @@ done
 # ────────────────────────────────────────────────────────────
 # STEP 7: Start Frontend
 # ────────────────────────────────────────────────────────────
-step "7/7" "Starting frontend"
+step "7/8" "Starting frontend"
 
 FRONTEND_PID_FILE="$PID_DIR/frontend.pid"
 
@@ -374,10 +422,21 @@ else
 fi
 
 # ────────────────────────────────────────────────────────────
-# Health summary
+# STEP 8: Health summary
 # ────────────────────────────────────────────────────────────
+step "8/8" "Verifying services"
+
 HEALTH=$(curl -sf "http://localhost:$BACKEND_PORT/api/v1/health" 2>/dev/null || echo "{}")
 VECTORS=$(echo "$HEALTH" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('qdrant',{}).get('point_count','?'))" 2>/dev/null || echo "?")
+
+# Verify frontend is reachable
+if [ "$START_FRONTEND" = true ]; then
+    if curl -sf "http://localhost:$FRONTEND_PORT" > /dev/null 2>&1; then
+        ok "Frontend verified reachable"
+    else
+        warn "Frontend not reachable — check $LOG_DIR/frontend.log"
+    fi
+fi
 
 echo ""
 echo "════════════════════════════════════════════════════════"

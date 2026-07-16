@@ -25,14 +25,12 @@ class EmbeddingService:
             return chunks, 0.0
 
         async with memory_track("embed_chunks"):
-            await embedding_limiter.acquire()
-            try:
+            async with embedding_limiter:
                 with measure("embed_chunks_batch"):
                     result, elapsed = await self._run_in_executor(
                         self._embed_sync,
                         chunks,
                     )
-                embedding_limiter.release()
 
                 cached = sum(1 for c in chunks if c.embedding is not None)
                 logger.info(
@@ -46,9 +44,6 @@ class EmbeddingService:
                 )
 
                 return result, elapsed
-            except Exception as exc:
-                embedding_limiter.release()
-                raise
 
     def _embed_sync(self, chunks: list[Chunk]) -> tuple[list[Chunk], float]:
         model = get_embedding_model()
@@ -94,18 +89,13 @@ class EmbeddingService:
             logger.debug("Query embedding cache hit")
             return cached
 
-        await embedding_limiter.acquire()
-        try:
+        async with embedding_limiter:
             embedding = await self._run_in_executor(
                 self._embed_query_sync,
                 text,
             )
-            embedding_limiter.release()
             embedding_cache.set_embedding(text, embedding)
             return embedding
-        except Exception:
-            embedding_limiter.release()
-            raise
 
     def _embed_query_sync(self, text: str) -> list[float]:
         model = get_embedding_model()

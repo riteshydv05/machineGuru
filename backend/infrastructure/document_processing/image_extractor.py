@@ -106,11 +106,12 @@ class ImageExtractor:
                         continue
 
         finally:
+            num_pages = len(doc)
             doc.close()
 
         logger.info(
             "Extracted {} images from '{}' ({} pages)",
-            len(extracted), pdf_path, len(doc),
+            len(extracted), pdf_path, num_pages,
         )
         return extracted
 

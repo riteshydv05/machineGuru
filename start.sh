@@ -153,8 +153,30 @@ else
              pip3 install --no-cache-dir -r requirements.txt"
 fi
 
-"$PYTHON" -c "import uvicorn" 2>/dev/null \
-    || die "uvicorn missing. Run: pip3 install --no-cache-dir -r backend/requirements.txt"
+if ! "$PYTHON" -c "import uvicorn" 2>/dev/null; then
+    warn "uvicorn not found — installing requirements now..."
+    # Locate the pip inside the same venv/python being used
+    VENV_PIP="$(dirname "$PYTHON")/pip"
+    [[ -x "$VENV_PIP" ]] || VENV_PIP="$PYTHON -m pip"
+
+    # Use TMPDIR=~/tmp to avoid /tmp ENOSPC on Jetson Cloud Lab
+    mkdir -p ~/tmp
+    echo "    Running: pip install --no-cache-dir -r requirements.txt"
+    if TMPDIR=~/tmp $VENV_PIP install --no-cache-dir \
+            -r "$DIR/backend/requirements.txt" 2>&1 \
+            | tee -a "$LOG_DIR/pip_install.log" \
+            | grep -E "^(Collecting|Installing|Successfully|ERROR|error)" \
+            | sed 's/^/    /'; then
+        ok "requirements installed"
+    else
+        err "pip install failed. Full log: $LOG_DIR/pip_install.log"
+        die "Fix the install errors above then re-run ./start.sh"
+    fi
+
+    # Re-verify
+    "$PYTHON" -c "import uvicorn" 2>/dev/null \
+        || die "uvicorn still missing after install — check $LOG_DIR/pip_install.log"
+fi
 
 ok "uvicorn available"
 

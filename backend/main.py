@@ -51,10 +51,22 @@ async def lifespan(application: FastAPI):
     Path(settings.LOG_DIR).mkdir(parents=True, exist_ok=True)
 
     qdrant = get_qdrant_repository()
-    await qdrant.ensure_collection()
+    try:
+        await qdrant.ensure_collection()
+    except Exception as exc:
+        # Qdrant is not running — warn but do NOT crash.
+        # The UI, health check, and LLM chat still work.
+        # Document ingestion / search will return 503 until Qdrant is up.
+        logger.warning(
+            "Qdrant not reachable at startup — document search disabled | error={}",
+            exc,
+        )
 
     doc_registry = get_document_registry()
-    await doc_registry.load()
+    try:
+        await doc_registry.load()
+    except Exception as exc:
+        logger.warning("Document registry load failed (Qdrant offline?) | error={}", exc)
 
     logger.info("Application starting | version={} debug={}", settings.VERSION, settings.DEBUG)
     yield

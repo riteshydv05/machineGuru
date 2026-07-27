@@ -198,6 +198,42 @@ if [[ "$NO_QDRANT" == true ]]; then
         || die "Qdrant not reachable — start it first or remove --no-qdrant"
 
 elif [[ -x "$QDRANT_BIN" ]]; then
+    # Binary exists — start it directly
+    :
+
+else
+    # Binary missing — try to download it automatically
+    warn "Qdrant binary not found at qdrant_bin/qdrant"
+    if command -v curl &>/dev/null && command -v tar &>/dev/null; then
+        ARCH="$(uname -m)"
+        case "$ARCH" in
+            aarch64|arm64)
+                QDRANT_URL="https://github.com/qdrant/qdrant/releases/latest/download/qdrant-aarch64-unknown-linux-musl.tar.gz" ;;
+            x86_64)
+                QDRANT_URL="https://github.com/qdrant/qdrant/releases/latest/download/qdrant-x86_64-unknown-linux-musl.tar.gz" ;;
+            *)
+                QDRANT_URL="" ;;
+        esac
+
+        if [[ -n "$QDRANT_URL" ]]; then
+            warn "Downloading Qdrant for $ARCH..."
+            mkdir -p "$DIR/qdrant_bin"
+            if curl -fL --progress-bar "$QDRANT_URL" | tar xz -C "$DIR/qdrant_bin/"; then
+                chmod +x "$QDRANT_BIN"
+                ok "Qdrant downloaded to qdrant_bin/qdrant"
+            else
+                warn "Download failed — continuing without Qdrant (document search disabled)"
+            fi
+        else
+            warn "Unknown architecture '$ARCH' — download Qdrant manually. See SETUP.md § 5"
+        fi
+    else
+        warn "curl or tar not available — download Qdrant manually. See SETUP.md § 5"
+    fi
+fi
+
+# Start Qdrant if the binary is now present
+if [[ -x "$QDRANT_BIN" ]] && [[ "$NO_QDRANT" != true ]]; then
     mkdir -p "$QDRANT_STORAGE"
     QDRANT__STORAGE__STORAGE_PATH="$QDRANT_STORAGE" \
     QDRANT__LOG_LEVEL="INFO" \
@@ -212,12 +248,13 @@ elif [[ -x "$QDRANT_BIN" ]]; then
             echo " ✗"
             err "Qdrant timed out. Last log:"
             tail -15 "$LOG_DIR/qdrant.log" 2>/dev/null | sed 's/^/    /'
-            die "Qdrant startup failed"
+            warn "Qdrant did not start — document search will be unavailable"
         }
         sleep 1; echo -n "."
     done
 
 elif curl -sf "http://$QDRANT_HOST:$QDRANT_PORT/healthz" &>/dev/null; then
+
     ok "Qdrant already running (external)"
 
 else

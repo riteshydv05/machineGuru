@@ -7,7 +7,8 @@ from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.staticfiles import StaticFiles
 from loguru import logger
 
 from api.dependencies import get_document_registry, get_qdrant_repository
@@ -214,3 +215,39 @@ async def get_stats():
 
 
 app.include_router(api_router, prefix="/api/v1")
+
+# ── Static frontend (React build) ─────────────────────────────────────────────
+# The Vite dist/ directory sits one level above the backend package:
+#   <project_root>/frontend/dist/
+# Resolved relative to this file so it works regardless of CWD.
+_FRONTEND_DIST = Path(__file__).parent.parent / "frontend" / "dist"
+
+if _FRONTEND_DIST.is_dir():
+    # Mount compiled assets (JS, CSS, images) at /assets
+    app.mount(
+        "/assets",
+        StaticFiles(directory=str(_FRONTEND_DIST / "assets")),
+        name="frontend-assets",
+    )
+
+    # Serve any other static files at the root (favicon, etc.)
+    app.mount(
+        "/static",
+        StaticFiles(directory=str(_FRONTEND_DIST)),
+        name="frontend-root",
+    )
+
+    # Catch-all: return index.html for every path not matched above
+    # This enables React Router's client-side routing.
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def serve_spa(full_path: str):
+        index = _FRONTEND_DIST / "index.html"
+        return FileResponse(str(index))
+
+    logger.info("Serving React frontend from {}", str(_FRONTEND_DIST))
+else:
+    logger.warning(
+        "Frontend dist not found at {} — UI will not be served. "
+        "Run 'npm run build' inside the frontend/ directory first.",
+        str(_FRONTEND_DIST),
+    )

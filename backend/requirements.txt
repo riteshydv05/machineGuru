@@ -3,12 +3,22 @@
 # ============================================================
 # Target: Ubuntu 20.04/22.04, Python 3.10+, ARM64 (Jetson Orin)
 #
-# ⚠  IMPORTANT — PyTorch on NVIDIA Jetson:
-#    Do NOT install PyTorch from PyPI on Jetson Orin.
-#    NVIDIA provides JetPack-specific wheels with CUDA support.
-#    Run deploy/jetson_setup.sh first, which installs the
-#    correct wheel from the NVIDIA Jetson PyPI index.
-#    On x86_64 development machines, pip install works normally.
+# Design principle: MINIMAL install for space-constrained devices.
+#
+# Heavy AI packages (torch, sentence-transformers, numpy) are
+# intentionally EXCLUDED because on Jetson Orin:
+#   - torch    → installed by JetPack/jetson_setup.sh (CUDA wheel)
+#   - sentence-transformers → not needed when USE_OLLAMA_EMBEDDINGS=true
+#   - numpy    → installed by JetPack as a system package
+#
+# Set USE_OLLAMA_EMBEDDINGS=true in .env to use Ollama's
+# /api/embeddings endpoint instead of SentenceTransformers.
+# This avoids installing torch, sentence-transformers, and numpy
+# from PyPI entirely — saving ~2 GB of disk space on the Jetson.
+#
+# On x86_64 dev machines that DO need SentenceTransformers locally,
+# install the extras manually:
+#   pip install sentence-transformers torch
 # ============================================================
 
 # ── Core Web Framework ──────────────────────────────────────
@@ -26,34 +36,32 @@ httpx>=0.28.0,<1.0.0
 pymupdf==1.25.3
 python-docx==1.1.2
 
-# ── AI / ML ─────────────────────────────────────────────────
-# NOTE: ollama Python SDK removed — we call the Ollama REST API directly
-# using requests (sync, for scripts) and httpx (async, for FastAPI services).
+# ── HTTP client (sync, for Ollama REST calls in scripts) ────
 requests>=2.31.0,<3.0.0
-sentence-transformers==3.4.1
-
-# PyTorch — see note above for Jetson ARM64 installation.
-# On x86_64 development machines this resolves normally.
-# On Jetson: deploy/jetson_setup.sh installs the GPU-enabled wheel first.
-torch>=2.1.0,<3.0.0
-
-# ── Multimodal / OCR ─────────────────────────────────────────
-Pillow>=10.0.0,<12.0.0
-pytesseract>=0.3.10,<1.0.0
 
 # ── Hybrid Retrieval ─────────────────────────────────────────
 rank-bm25>=0.2.2,<1.0.0
 
-# ── Monitoring & Benchmarking ────────────────────────────────
+# ── Image processing (needed by image_extractor.py) ─────────
+# Pillow is lightweight (~4 MB) — kept.
+# pytesseract is OPTIONAL: image_extractor.py catches ImportError
+# and silently skips OCR if it is not installed.
+Pillow>=10.0.0,<12.0.0
+
+# ── Monitoring ──────────────────────────────────────────────
+# psutil is tiny and used for memory/CPU tracking.
+# prometheus-client is OPTIONAL: main.py catches ImportError
+# and disables the /metrics endpoint if not installed.
 psutil>=6.1.0,<7.0.0
-prometheus-client>=0.21.0,<1.0.0
 
 # ── Utilities ────────────────────────────────────────────────
 python-multipart==0.0.20
 python-dotenv==1.0.1
 loguru==0.7.3
 
-# ── Testing (development only — not installed in production) ─
-# pytest>=8.0.0
-# pytest-asyncio>=0.24.0
-# httpx>=0.28.0   (already above, needed for TestClient)
+# ── NOT installed here — see notes above ────────────────────
+# torch               → JetPack wheel (jetson_setup.sh) or manual install
+# sentence-transformers → not needed with USE_OLLAMA_EMBEDDINGS=true
+# numpy               → JetPack system package or pulled in by torch
+# pytesseract         → optional OCR, install manually if needed
+# prometheus-client   → optional metrics, install manually if needed

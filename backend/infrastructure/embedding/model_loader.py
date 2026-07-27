@@ -239,44 +239,34 @@ class OllamaEmbeddingModel(ManagedModel):
         normalize_embeddings: bool = True,
         show_progress_bar: bool = False,
         **kwargs,
-    ) -> Any:
+    ) -> list:
         """
         Encode texts using Ollama, matching SentenceTransformer.encode() API.
-        Returns a list of numpy-like arrays (actually lists) or a single array.
+        Returns a list of float lists (one per text) or a single float list.
+        No numpy required — pure Python normalisation.
         """
-        import numpy as np
-
         if isinstance(texts, str):
-            embedding = self._embed_via_ollama(texts)
-            arr = np.array(embedding, dtype=np.float32)
-            if normalize_embeddings:
-                norm = np.linalg.norm(arr)
-                if norm > 0:
-                    arr = arr / norm
-            return arr
+            return self._embed_and_normalise(texts, normalize_embeddings)
 
-        results = []
-        for text in texts:
-            embedding = self._embed_via_ollama(text)
-            arr = np.array(embedding, dtype=np.float32)
-            if normalize_embeddings:
-                norm = np.linalg.norm(arr)
-                if norm > 0:
-                    arr = arr / norm
-            results.append(arr)
-
-        return np.array(results)
+        return [self._embed_and_normalise(t, normalize_embeddings) for t in texts]
 
     def encode_single(self, text: str) -> list[float]:
         """Encode a single text and return as list of floats."""
+        return self._embed_and_normalise(text, normalize=True)
+
+    # ------------------------------------------------------------------ #
+    # Internal helpers                                                     #
+    # ------------------------------------------------------------------ #
+
+    def _embed_and_normalise(self, text: str, normalize: bool = True) -> list[float]:
+        """Embed one text via Ollama and optionally L2-normalise (pure Python)."""
+        import math
         embedding = self._embed_via_ollama(text)
-        # Normalize
-        import numpy as np
-        arr = np.array(embedding, dtype=np.float32)
-        norm = np.linalg.norm(arr)
-        if norm > 0:
-            arr = arr / norm
-        return arr.tolist()
+        if normalize:
+            norm = math.sqrt(sum(x * x for x in embedding))
+            if norm > 0:
+                embedding = [x / norm for x in embedding]
+        return embedding
 
 
 # ── Model Selection ──────────────────────────────────────────

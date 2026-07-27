@@ -1,33 +1,42 @@
 """
 Vision service for image captioning using Ollama's multimodal models.
 
-Generates descriptive captions for extracted images using models like LLaVA.
+Communicates with the Ollama REST API directly via httpx — no SDK used.
+Endpoint: http://172.17.0.1:11434/api/generate
+
+On Jetson, the only permitted model is llama3.2:1b. If the vision model
+(llava:7b) is not available on the board, the service gracefully returns
+an empty caption instead of crashing.
 """
 
 import asyncio
 import base64
+import json
 import time
 from pathlib import Path
 
+import httpx
 from loguru import logger
-from ollama import AsyncClient
 
 from core.config import settings
 from core.memory import memory_track
 
 
 class VisionService:
-    """Generate image captions using Ollama vision models."""
+    """Generate image captions using Ollama vision models via REST API."""
 
     def __init__(
         self,
         base_url: str = settings.OLLAMA_BASE_URL,
         model: str = settings.VISION_MODEL,
     ) -> None:
-        self._client = AsyncClient(host=base_url)
         self._model = model
+        self._api_url = f"{base_url}/api/generate"
         self._caption_count = 0
         self._total_time = 0.0
+
+        # Shared async HTTP client
+        self._http = httpx.AsyncClient(timeout=settings.REQUEST_TIMEOUT_SECONDS)
 
     async def caption_image(self, image_path: str) -> str:
         """Generate a detailed caption for a single image."""
@@ -40,33 +49,45 @@ class VisionService:
             async with memory_track("vision_caption"):
                 start = time.perf_counter()
 
-                # Read and encode image
+                # Read and base64-encode the image
                 image_data = base64.b64encode(path.read_bytes()).decode("utf-8")
 
-                response = await self._client.chat(
-                    model=self._model,
-                    messages=[
-                        {
-                            "role": "user",
-                            "content": (
-                                "Describe this technical image in detail. "
-                                "If it is a diagram, schematic, or flowchart, describe what it shows, "
-                                "including labels, connections, components, and any text visible. "
-                                "If it is a table, extract the data. "
-                                "If it is a warning or safety icon, describe the warning. "
-                                "Be specific and technical."
-                            ),
-                            "images": [image_data],
-                        }
-                    ],
-                    options={
-                        "temperature": 0.1,
-                        "num_predict": 512,
-                    },
-                    keep_alive=settings.LLM_KEEP_ALIVE,
+                prompt = (
+                    "Describe this technical image in detail. "
+                    "If it is a diagram, schematic, or flowchart, describe what it shows, "
+                    "including labels, connections, components, and any text visible. "
+                    "If it is a table, extract the data. "
+                    "If it is a warning or safety icon, describe the warning. "
+                    "Be specific and technical."
                 )
 
-                caption = response.get("message", {}).get("content", "")
+                # Ollama /api/generate accepts images in the payload
+                payload = {
+                    "model": self._model,
+                    "prompt": prompt,
+                    "images": [image_data],
+                    "stream": False,
+                    "options": {
+                        "temperature": 0.1,
+                        "num_predict": 512,
+                        "num_gpu": 1,
+                        "use_mmap": True,
+                        "num_ctx": settings.NUM_CTX,
+                    },
+                }
+
+                response = await self._http.post(self._api_url, json=payload)
+
+                if response.status_code != 200:
+                    logger.warning(
+                        "Vision API error | status={} body={}",
+                        response.status_code,
+                        response.text[:200],
+                    )
+                    return ""
+
+                data = response.json()
+                caption = data.get("response", "")
                 elapsed = time.perf_counter() - start
 
                 self._caption_count += 1
@@ -107,6 +128,10 @@ class VisionService:
                 captions.append(result)
 
         return captions
+
+    async def close(self) -> None:
+        """Close the underlying HTTP client."""
+        await self._http.aclose()
 
     @property
     def stats(self) -> dict:

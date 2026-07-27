@@ -42,13 +42,16 @@ class Settings(BaseSettings):
     ]
 
     # ── Ollama ───────────────────────────────────────────────
-    OLLAMA_BASE_URL: str = "http://localhost:11434"
-    LLM_MODEL: str = "llama3.2:1b"
+    # Jetson Orin: Ollama is reachable via the Docker bridge IP.
+    # On local dev, override with OLLAMA_BASE_URL=http://localhost:11434 in .env.
+    OLLAMA_BASE_URL: str = "http://172.17.0.1:11434"
+    LLM_MODEL: str = "llama3.2:1b"      # Only approved model for Jetson deployment
     VISION_MODEL: str = "llava:7b"
     EMBEDDING_MODEL: str = "intfloat/multilingual-e5-small"
 
     # LLM generation parameters
-    NUM_CTX: int = 8192
+    # NUM_CTX kept small (1024) to save ~500 MB RAM on Jetson Orin.
+    NUM_CTX: int = 1024
     NUM_PREDICT: int = 4096
     LLM_TEMPERATURE: float = 0.1
     LLM_KEEP_ALIVE: str = "10m"

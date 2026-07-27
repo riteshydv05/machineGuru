@@ -1,9 +1,20 @@
-import asyncio
+"""
+LLM service — communicates with the Ollama REST API directly via httpx.
+
+No ollama SDK is used. All calls go to the Ollama /api/generate endpoint
+as specified for Jetson Orin deployment:
+  API_URL : http://172.17.0.1:11434/api/generate
+
+Model is fixed to llama3.2:1b for all Jetson deployments.
+Options are tuned for Jetson Orin memory constraints.
+"""
+
+import json
 import time
 from collections.abc import AsyncGenerator
 
+import httpx
 from loguru import logger
-from ollama import AsyncClient
 
 from core.benchmark import measure
 from core.concurrency import llm_limiter
@@ -11,18 +22,41 @@ from core.config import settings
 from core.exceptions import LlmError
 from core.memory import memory_track
 
+# Jetson-specific Ollama REST endpoint
+_API_URL = f"{settings.OLLAMA_BASE_URL}/api/generate"
+
+# Fixed model for all Jetson deployments — do NOT change
+_JETSON_MODEL = "llama3.2:1b"
+
+# Jetson-optimised payload options (from the deployment spec)
+_JETSON_OPTIONS: dict = {
+    "num_ctx": settings.NUM_CTX,   # Keep context small — saves ~500 MB RAM
+    "num_gpu": 1,                   # 1 GPU device on Jetson Orin
+    "use_mmap": True,               # Memory-mapped loading for Jetson
+}
+
 
 class OllamaService:
+    """Call the Ollama REST API directly without the ollama Python SDK."""
+
     def __init__(
         self,
         base_url: str = settings.OLLAMA_BASE_URL,
-        model: str = settings.LLM_MODEL,
+        model: str = _JETSON_MODEL,       # Always llama3.2:1b on Jetson
     ) -> None:
-        self._client = AsyncClient(host=base_url)
-        self._model = model
+        # model param kept for API compatibility but overridden to Jetson value
+        self._model = _JETSON_MODEL
+        self._api_url = f"{base_url}/api/generate"
         self._generation_count = 0
         self._total_tokens = 0
         self._total_time = 0.0
+
+        # Shared async HTTP client (connection-pooled)
+        self._http = httpx.AsyncClient(timeout=settings.REQUEST_TIMEOUT_SECONDS)
+
+    # ------------------------------------------------------------------ #
+    # Public interface                                                     #
+    # ------------------------------------------------------------------ #
 
     async def generate(
         self,
@@ -30,6 +64,7 @@ class OllamaService:
         user_prompt: str,
         temperature: float = settings.LLM_TEMPERATURE,
     ) -> str:
+        """Non-streaming generation — collect all chunks and return as string."""
         chunks: list[str] = []
         async for chunk in self.generate_stream(
             system_prompt=system_prompt,
@@ -45,6 +80,31 @@ class OllamaService:
         user_prompt: str,
         temperature: float = settings.LLM_TEMPERATURE,
     ) -> AsyncGenerator[str, None]:
+        """
+        Streaming generation via Ollama REST /api/generate.
+
+        Builds a combined prompt from system + user parts, posts to Ollama
+        with stream=True, and yields each partial response token.
+        """
+        # Combine system + user prompts into a single prompt string
+        combined_prompt = (
+            f"<|system|>\n{system_prompt}\n<|user|>\n{user_prompt}\n<|assistant|>\n"
+        )
+
+        payload = {
+            "model": self._model,
+            "prompt": combined_prompt,
+            "stream": True,
+            "options": {
+                **_JETSON_OPTIONS,
+                "temperature": temperature,
+                "num_predict": settings.NUM_PREDICT,
+                "top_p": 0.9,
+                "repeat_penalty": 1.15,
+                "top_k": 40,
+            },
+        }
+
         logger.debug(
             "LLM generate_stream | model={} temp={} sys_len={} user_len={} ctx={} predict={}",
             self._model,
@@ -62,31 +122,35 @@ class OllamaService:
                 first_token_time: float | None = None
 
                 async with memory_track("llm_generate"):
-                    stream = await self._client.chat(
-                        model=self._model,
-                        messages=[
-                            {"role": "system", "content": system_prompt},
-                            {"role": "user", "content": user_prompt},
-                        ],
-                        options={
-                            "temperature": temperature,
-                            "num_predict": settings.NUM_PREDICT,
-                            "top_p": 0.9,
-                            "repeat_penalty": 1.15,
-                            "top_k": 40,
-                            "num_ctx": settings.NUM_CTX,
-                        },
-                        stream=True,
-                        keep_alive=settings.LLM_KEEP_ALIVE,
-                    )
+                    # Stream NDJSON lines from Ollama
+                    async with self._http.stream(
+                        "POST", self._api_url, json=payload
+                    ) as response:
+                        if response.status_code != 200:
+                            body = await response.aread()
+                            raise LlmError(
+                                message="Ollama API returned an error",
+                                detail=f"HTTP {response.status_code}: {body.decode()}",
+                            )
 
-                    async for part in stream:
-                        content = part.get("message", {}).get("content", "")
-                        if content:
-                            token_count += 1
-                            if first_token_time is None:
-                                first_token_time = time.perf_counter() - start
-                            yield content
+                        async for line in response.aiter_lines():
+                            if not line:
+                                continue
+                            try:
+                                data = json.loads(line)
+                            except json.JSONDecodeError:
+                                continue
+
+                            content = data.get("response", "")
+                            if content:
+                                token_count += 1
+                                if first_token_time is None:
+                                    first_token_time = time.perf_counter() - start
+                                yield content
+
+                            # Ollama sends {"done": true} as the final line
+                            if data.get("done"):
+                                break
 
                 elapsed = time.perf_counter() - start
                 self._generation_count += 1
@@ -113,12 +177,22 @@ class OllamaService:
                         token_count,
                     )
 
+            except LlmError:
+                raise
             except Exception as exc:
                 logger.error("LLM generation failed | error={}", exc)
                 raise LlmError(
                     message="Failed to generate LLM response",
                     detail=str(exc),
                 ) from exc
+
+    async def close(self) -> None:
+        """Close the underlying HTTP client."""
+        await self._http.aclose()
+
+    # ------------------------------------------------------------------ #
+    # Stats                                                                #
+    # ------------------------------------------------------------------ #
 
     @property
     def stats(self) -> dict:

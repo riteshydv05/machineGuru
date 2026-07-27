@@ -97,6 +97,11 @@ if [[ -f "$DIR/.env" ]]; then
     done < "$DIR/.env"
 fi
 
+# Ensure LOG_DIR and PID_DIR are absolute paths (handles relative paths imported from .env)
+[[ "$LOG_DIR" != /* ]] && LOG_DIR="$DIR/$LOG_DIR"
+[[ "$PID_DIR" != /* ]] && PID_DIR="$DIR/$PID_DIR"
+mkdir -p "$LOG_DIR" "$PID_DIR"
+
 # ── Kill a process by PID file ────────────────────────────────
 _stop_pid() {
     local name="$1" pid_file="$PID_DIR/$2.pid"

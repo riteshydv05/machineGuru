@@ -74,6 +74,29 @@ LLM_MODEL="$(_env LLM_MODEL llama3.2:1b)"
 # Resolve relative paths to absolute
 [[ "$QDRANT_STORAGE" != /* ]] && QDRANT_STORAGE="$DIR/$QDRANT_STORAGE"
 
+# ── Export all variables from .env to the environment ────────
+if [[ -f "$DIR/.env" ]]; then
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        line="${line//$'\r'/}"
+        # Trim leading whitespace
+        line="${line##[[:space:]]}"
+        # Trim trailing whitespace
+        line="${line%%[[:space:]]}"
+        
+        if [[ -n "$line" ]] && [[ ! "$line" =~ ^# ]] && [[ "$line" =~ = ]]; then
+            key=$(echo "$line" | cut -d= -f1)
+            val=$(echo "$line" | cut -d= -f2-)
+            # Remove wrapping double quotes
+            val="${val%\"}"
+            val="${val#\"}"
+            # Remove wrapping single quotes
+            val="${val%\'}"
+            val="${val#\'}"
+            export "$key"="$val"
+        fi
+    done < "$DIR/.env"
+fi
+
 # ── Kill a process by PID file ────────────────────────────────
 _stop_pid() {
     local name="$1" pid_file="$PID_DIR/$2.pid"

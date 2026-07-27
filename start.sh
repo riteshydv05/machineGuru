@@ -371,7 +371,7 @@ cd "$DIR"
 echo -n "    Waiting for backend"
 for i in $(seq 1 30); do
     HTTP=$(curl -s -o /dev/null -w "%{http_code}" --max-time 3 \
-           "http://localhost:$BACKEND_PORT/api/v1/health" 2>/dev/null || echo "000")
+           "http://127.0.0.1:$BACKEND_PORT/api/v1/health" 2>/dev/null || echo "000")
     [[ "$HTTP" == "200" ]] && { echo " ✓"; break; }
     (( i == 30 )) && {
         echo " ✗  (last HTTP: $HTTP)"
@@ -439,7 +439,7 @@ print(https[0] if https else '')" 2>/dev/null || echo "")
 fi
 
 # ── Summary ───────────────────────────────────────────────────
-VECTORS=$(curl -sf "http://localhost:$BACKEND_PORT/api/v1/health" 2>/dev/null \
+VECTORS=$(curl -sf "http://127.0.0.1:$BACKEND_PORT/api/v1/health" 2>/dev/null \
     | "$PYTHON" -c \
       "import sys,json; d=json.load(sys.stdin); print(d.get('qdrant',{}).get('point_count','?'))" \
       2>/dev/null || echo "?")

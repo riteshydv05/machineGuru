@@ -269,26 +269,40 @@ class OllamaEmbeddingModel(ManagedModel):
         return embedding
 
 
-# ── Model Selection ──────────────────────────────────────────
-# Choose embedding backend based on USE_OLLAMA_EMBEDDINGS setting
+# ── Model Selection (lazy — deferred to first call) ──────────
+# The choice between Ollama and SentenceTransformers must NOT happen
+# at module-import time because pydantic-settings may not have resolved
+# the .env file yet (import order, working directory, etc.).
+# Instead, we defer to the first call of get_embedding_model().
 _model_lock = threading.Lock()
-_model: Any = None
-
-if settings.USE_OLLAMA_EMBEDDINGS:
-    logger.info("Embedding backend: Ollama (USE_OLLAMA_EMBEDDINGS=true)")
-    _model_instance = OllamaEmbeddingModel()
-else:
-    logger.info("Embedding backend: SentenceTransformers (USE_OLLAMA_EMBEDDINGS=false)")
-    _model_instance = SentenceTransformerModel()
-
-ModelRegistry.register("embedding", _model_instance)
+_model_instance: ManagedModel | None = None
 
 
 def get_embedding_model() -> Any:
     """
-    Get the active embedding model instance.
+    Get the active embedding model instance (lazy singleton).
 
-    Returns either a SentenceTransformerModel or OllamaEmbeddingModel,
-    both of which support .encode() and .encode_single() methods.
+    On first call, reads settings.USE_OLLAMA_EMBEDDINGS and creates
+    either an OllamaEmbeddingModel or SentenceTransformerModel.
+    Subsequent calls return the same instance.
     """
-    return _model_instance.model
+    global _model_instance
+
+    if _model_instance is not None:
+        return _model_instance.model
+
+    with _model_lock:
+        # Double-check after acquiring lock
+        if _model_instance is not None:
+            return _model_instance.model
+
+        if settings.USE_OLLAMA_EMBEDDINGS:
+            logger.info("Embedding backend: Ollama (USE_OLLAMA_EMBEDDINGS=true)")
+            _model_instance = OllamaEmbeddingModel()
+        else:
+            logger.info("Embedding backend: SentenceTransformers (USE_OLLAMA_EMBEDDINGS=false)")
+            _model_instance = SentenceTransformerModel()
+
+        ModelRegistry.register("embedding", _model_instance)
+        return _model_instance.model
+

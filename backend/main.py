@@ -50,8 +50,6 @@ async def lifespan(application: FastAPI):
     Path(settings.UPLOAD_DIR).mkdir(parents=True, exist_ok=True)
     Path(settings.LOG_DIR).mkdir(parents=True, exist_ok=True)
 
-    logger.info("DIAGNOSTIC: settings.USE_OLLAMA_EMBEDDINGS={} type={}", settings.USE_OLLAMA_EMBEDDINGS, type(settings.USE_OLLAMA_EMBEDDINGS))
-
     qdrant = get_qdrant_repository()
     try:
         await qdrant.ensure_collection()

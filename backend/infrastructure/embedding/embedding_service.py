@@ -83,7 +83,8 @@ class EmbeddingService:
                 ) from exc
 
             for idx, embedding in zip(uncached_indices, embeddings):
-                emb_list = embedding.tolist()
+                # .tolist() is numpy-specific; Ollama returns plain lists already
+                emb_list = embedding.tolist() if hasattr(embedding, "tolist") else list(embedding)
                 chunks[idx].embedding = emb_list
                 embedding_cache.set_embedding(chunks[idx].content, emb_list)
 
@@ -117,7 +118,8 @@ class EmbeddingService:
             f"query: {text}",
             normalize_embeddings=True,
         )
-        return embedding.tolist()
+        # .tolist() is numpy-specific; Ollama returns plain lists already
+        return embedding.tolist() if hasattr(embedding, "tolist") else list(embedding)
 
     async def _run_in_executor(
         self,

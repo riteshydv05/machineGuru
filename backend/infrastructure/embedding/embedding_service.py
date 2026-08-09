@@ -46,7 +46,14 @@ class EmbeddingService:
                 return result, elapsed
 
     def _embed_sync(self, chunks: list[Chunk]) -> tuple[list[Chunk], float]:
-        model = get_embedding_model()
+        try:
+            model = get_embedding_model()
+        except Exception as exc:
+            logger.error("Embedding model not available | error={}", exc)
+            raise EmbeddingError(
+                message="Embedding model is not available. Check the backend logs for details.",
+                detail=str(exc),
+            ) from exc
         start = time.perf_counter()
 
         uncached_indices: list[int] = []
@@ -98,7 +105,14 @@ class EmbeddingService:
             return embedding
 
     def _embed_query_sync(self, text: str) -> list[float]:
-        model = get_embedding_model()
+        try:
+            model = get_embedding_model()
+        except Exception as exc:
+            logger.error("Embedding model not available for query | error={}", exc)
+            raise EmbeddingError(
+                message="Embedding model is not available. Check the backend logs for details.",
+                detail=str(exc),
+            ) from exc
         embedding = model.encode(
             f"query: {text}",
             normalize_embeddings=True,

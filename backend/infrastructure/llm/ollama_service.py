@@ -1,12 +1,9 @@
 """
 LLM service — communicates with the Ollama REST API directly via httpx.
 
-No ollama SDK is used. All calls go to the Ollama /api/generate endpoint
-as specified for Jetson Orin deployment:
-  API_URL : http://172.17.0.1:11434/api/generate
-
-Model is fixed to llama3.2:1b for all Jetson deployments.
-Options are tuned for Jetson Orin memory constraints.
+No ollama SDK is used. All calls go to the Ollama /api/generate endpoint.
+Model is read from settings.LLM_MODEL (configurable via .env).
+Options are tuned for resource-constrained deployments (Jetson Orin).
 """
 
 import json
@@ -22,17 +19,11 @@ from core.config import settings
 from core.exceptions import LlmError
 from core.memory import memory_track
 
-# Jetson-specific Ollama REST endpoint
-_API_URL = f"{settings.OLLAMA_BASE_URL}/api/generate"
-
-# Fixed model for all Jetson deployments — do NOT change
-_JETSON_MODEL = "llama3.2:1b"
-
-# Jetson-optimised payload options (from the deployment spec)
-_JETSON_OPTIONS: dict = {
+# Default generation options (tuned for constrained devices)
+_DEFAULT_OPTIONS: dict = {
     "num_ctx": settings.NUM_CTX,   # Keep context small — saves ~500 MB RAM
     "num_gpu": 1,                   # 1 GPU device on Jetson Orin
-    "use_mmap": True,               # Memory-mapped loading for Jetson
+    "use_mmap": True,               # Memory-mapped loading
 }
 
 
@@ -42,17 +33,25 @@ class OllamaService:
     def __init__(
         self,
         base_url: str = settings.OLLAMA_BASE_URL,
-        model: str = _JETSON_MODEL,       # Always llama3.2:1b on Jetson
+        model: str = settings.LLM_MODEL,
     ) -> None:
-        # model param kept for API compatibility but overridden to Jetson value
-        self._model = _JETSON_MODEL
-        self._api_url = f"{base_url}/api/generate"
+        self._model = model
+        self._base_url = base_url.rstrip("/")
+        self._api_url = f"{self._base_url}/api/generate"
         self._generation_count = 0
         self._total_tokens = 0
         self._total_time = 0.0
+        self._connectivity_checked = False
 
         # Shared async HTTP client (connection-pooled)
         self._http = httpx.AsyncClient(timeout=settings.REQUEST_TIMEOUT_SECONDS)
+
+        logger.info(
+            "OllamaService initialized | model={} url={}",
+            self._model,
+            self._api_url,
+        )
+
 
     # ------------------------------------------------------------------ #
     # Public interface                                                     #
@@ -91,12 +90,17 @@ class OllamaService:
             f"<|system|>\n{system_prompt}\n<|user|>\n{user_prompt}\n<|assistant|>\n"
         )
 
+        # Check Ollama connectivity on first request
+        if not self._connectivity_checked:
+            await self._check_connectivity()
+            self._connectivity_checked = True
+
         payload = {
             "model": self._model,
             "prompt": combined_prompt,
             "stream": True,
             "options": {
-                **_JETSON_OPTIONS,
+                **_DEFAULT_OPTIONS,
                 "temperature": temperature,
                 "num_predict": settings.NUM_PREDICT,
                 "top_p": 0.9,
@@ -179,12 +183,44 @@ class OllamaService:
 
             except LlmError:
                 raise
+            except httpx.ConnectError as exc:
+                logger.error(
+                    "Cannot connect to Ollama at {} | error={}",
+                    self._api_url,
+                    exc,
+                )
+                self._connectivity_checked = False
+                raise LlmError(
+                    message=f"Cannot connect to Ollama at {self._base_url}. "
+                            f"Make sure Ollama is running ('ollama serve') and "
+                            f"OLLAMA_BASE_URL is correct in .env.",
+                    detail=str(exc),
+                ) from exc
             except Exception as exc:
                 logger.error("LLM generation failed | error={}", exc)
                 raise LlmError(
                     message="Failed to generate LLM response",
                     detail=str(exc),
                 ) from exc
+
+    async def _check_connectivity(self) -> None:
+        """Verify Ollama is reachable before first LLM call."""
+        try:
+            resp = await self._http.get(self._base_url, timeout=5.0)
+            if resp.status_code == 200:
+                logger.info("Ollama connectivity OK | url={}", self._base_url)
+            else:
+                logger.warning(
+                    "Ollama responded with unexpected status | url={} status={}",
+                    self._base_url,
+                    resp.status_code,
+                )
+        except Exception as exc:
+            logger.warning(
+                "Ollama not reachable at {} — LLM calls will fail | error={}",
+                self._base_url,
+                exc,
+            )
 
     async def close(self) -> None:
         """Close the underlying HTTP client."""

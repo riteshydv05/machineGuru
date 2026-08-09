@@ -1,9 +1,10 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { sendQuery, sendQueryStream } from "@/services/api";
 import type { ChatMessage, SourceReference } from "@/types";
 
 const HISTORY_KEY = "mg-chat-history";
+const CURRENT_SESSION_KEY = "mg-current-session";
 
 interface Session {
   id: string;
@@ -12,7 +13,35 @@ interface Session {
   preview: string;
 }
 
-function saveSession(messages: ChatMessage[]) {
+// ── Persistence helpers ──────────────────────────────────────
+
+function saveCurrentSession(messages: ChatMessage[]) {
+  try {
+    if (messages.length === 0) {
+      localStorage.removeItem(CURRENT_SESSION_KEY);
+      return;
+    }
+    localStorage.setItem(CURRENT_SESSION_KEY, JSON.stringify(messages));
+  } catch {
+    // Ignore localStorage errors
+  }
+}
+
+function loadCurrentSession(): ChatMessage[] {
+  try {
+    const raw = localStorage.getItem(CURRENT_SESSION_KEY);
+    if (!raw) return [];
+    const messages = JSON.parse(raw) as ChatMessage[];
+    // Filter out empty assistant messages (leftover from interrupted streams)
+    return messages.filter(
+      (m) => m.role === "user" || (m.role === "assistant" && m.content),
+    );
+  } catch {
+    return [];
+  }
+}
+
+function saveToHistory(messages: ChatMessage[]) {
   if (messages.length < 2) return;
   try {
     const raw = localStorage.getItem(HISTORY_KEY);
@@ -42,12 +71,39 @@ function saveSession(messages: ChatMessage[]) {
   }
 }
 
+// ── Hook ─────────────────────────────────────────────────────
+
 export function useChat() {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [messages, setMessages] = useState<ChatMessage[]>(() =>
+    loadCurrentSession(),
+  );
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const sessionIdRef = useRef<string | null>(null);
+
+  // Initialize session ID from restored messages
+  useEffect(() => {
+    if (messages.length > 0 && !sessionIdRef.current) {
+      sessionIdRef.current = messages[0]?.id ?? null;
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Persist the current session whenever messages change
+  // (debounced save — only when messages have content)
+  useEffect(() => {
+    // Only save non-empty sessions with at least a completed message pair
+    const hasContent = messages.some(
+      (m) => m.role === "assistant" && m.content,
+    );
+    if (messages.length > 0 && hasContent) {
+      saveCurrentSession(messages);
+      saveToHistory(messages);
+    } else if (messages.length > 0) {
+      // Still save to current session even if assistant hasn't responded yet
+      saveCurrentSession(messages);
+    }
+  }, [messages]);
 
   const send = useCallback(
     async (text: string, useStream = true, documentId?: string | null) => {
@@ -81,37 +137,34 @@ export function useChat() {
         abortRef.current = controller;
 
         let sources: SourceReference[] = [];
-        let finalMessages: ChatMessage[] = [];
 
         await sendQueryStream(
           text,
           5,
           {
             onToken: (token) => {
-              setMessages((prev) => {
-                const next = prev.map((m) =>
+              setMessages((prev) =>
+                prev.map((m) =>
                   m.id === assistantId
                     ? { ...m, content: m.content + token }
                     : m,
-                );
-                finalMessages = next;
-                return next;
-              });
+                ),
+              );
             },
             onSources: (raw) => {
               sources = raw as SourceReference[];
-              setMessages((prev) => {
-                const next = prev.map((m) =>
-                  m.id === assistantId ? { ...m, sources, retrievedChunks: sources.length } : m,
-                );
-                finalMessages = next;
-                return next;
-              });
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === assistantId
+                    ? { ...m, sources, retrievedChunks: sources.length }
+                    : m,
+                ),
+              );
             },
             onDone: (citations, timings, model) => {
               const responseTimeMs = Math.round(performance.now() - sendTime);
-              setMessages((prev) => {
-                const next = prev.map((m) =>
+              setMessages((prev) =>
+                prev.map((m) =>
                   m.id === assistantId
                     ? {
                         ...m,
@@ -122,17 +175,22 @@ export function useChat() {
                         model: model ?? undefined,
                       }
                     : m,
-                );
-                finalMessages = next;
-                saveSession(next);
-                return next;
-              });
+                ),
+              );
               setIsLoading(false);
             },
             onError: (err) => {
+              // Remove the empty assistant message on error
+              setMessages((prev) => {
+                const updated = prev.map((m) =>
+                  m.id === assistantId
+                    ? { ...m, content: m.content || "[Error: " + err + "]" }
+                    : m,
+                );
+                return updated;
+              });
               setError(err);
               setIsLoading(false);
-              if (finalMessages.length > 0) saveSession(finalMessages);
             },
           },
           controller.signal,
@@ -142,8 +200,8 @@ export function useChat() {
         try {
           const res = await sendQuery(text, 5, documentId);
           const responseTimeMs = Math.round(performance.now() - sendTime);
-          setMessages((prev) => {
-            const next = prev.map((m) =>
+          setMessages((prev) =>
+            prev.map((m) =>
               m.id === assistantId
                 ? {
                     ...m,
@@ -156,10 +214,8 @@ export function useChat() {
                     model: res.model ?? undefined,
                   }
                 : m,
-            );
-            saveSession(next);
-            return next;
-          });
+            ),
+          );
         } catch {
           setError("Failed to get response. Is the server running?");
         } finally {
@@ -178,18 +234,21 @@ export function useChat() {
   const clear = useCallback(() => {
     abortRef.current?.abort();
     setMessages((prev) => {
-      if (prev.length > 1) saveSession(prev);
+      if (prev.length > 1) saveToHistory(prev);
       return [];
     });
     setError(null);
     sessionIdRef.current = null;
+    saveCurrentSession([]);
   }, []);
 
   const regenerate = useCallback(
     (messageId: string) => {
       setMessages((prev) => {
         // Find the assistant message to regenerate
-        const msgIdx = prev.findIndex((m) => m.id === messageId && m.role === "assistant");
+        const msgIdx = prev.findIndex(
+          (m) => m.id === messageId && m.role === "assistant",
+        );
         if (msgIdx < 1) return prev;
 
         // Find the preceding user message
@@ -198,7 +257,6 @@ export function useChat() {
 
         // Remove the assistant message
         const next = prev.slice(0, msgIdx);
-        saveSession(next);
 
         // Re-send (will happen asynchronously)
         setTimeout(() => send(userMsg.content, true), 0);
@@ -217,15 +275,22 @@ export function useChat() {
       // If it's a user message, also remove the following assistant message
       const msg = prev[idx]!;
       let next: ChatMessage[];
-      if (msg.role === "user" && idx + 1 < prev.length && prev[idx + 1]!.role === "assistant") {
+      if (
+        msg.role === "user" &&
+        idx + 1 < prev.length &&
+        prev[idx + 1]!.role === "assistant"
+      ) {
         next = [...prev.slice(0, idx), ...prev.slice(idx + 2)];
-      } else if (msg.role === "assistant" && idx > 0 && prev[idx - 1]!.role === "user") {
+      } else if (
+        msg.role === "assistant" &&
+        idx > 0 &&
+        prev[idx - 1]!.role === "user"
+      ) {
         next = [...prev.slice(0, idx - 1), ...prev.slice(idx + 1)];
       } else {
         next = prev.filter((m) => m.id !== messageId);
       }
 
-      if (next.length > 1) saveSession(next);
       return next;
     });
   }, []);
@@ -240,5 +305,15 @@ export function useChat() {
     return md;
   }, [messages]);
 
-  return { messages, isLoading, error, send, cancel, clear, regenerate, deleteMessage, exportMarkdown };
+  return {
+    messages,
+    isLoading,
+    error,
+    send,
+    cancel,
+    clear,
+    regenerate,
+    deleteMessage,
+    exportMarkdown,
+  };
 }

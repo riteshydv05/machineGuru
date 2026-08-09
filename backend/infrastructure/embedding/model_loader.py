@@ -148,14 +148,18 @@ class OllamaEmbeddingModel(ManagedModel):
             return
 
         self._base_url = settings.OLLAMA_BASE_URL.rstrip("/")
-        # For Ollama embeddings, use a simpler model name
-        # Convert HuggingFace format to Ollama format if needed
         raw_model = settings.EMBEDDING_MODEL
+
+        # Warn if the model name looks like a HuggingFace ID (not an Ollama model)
         if "/" in raw_model:
-            # e.g., "intfloat/multilingual-e5-small" -> try as-is first
-            self._model_name = raw_model
-        else:
-            self._model_name = raw_model
+            logger.warning(
+                "Embedding model '{}' looks like a HuggingFace model ID. "
+                "Ollama uses different names (e.g., 'nomic-embed-text'). "
+                "Trying as-is, but this may fail. "
+                "Consider setting USE_OLLAMA_EMBEDDINGS=false to use SentenceTransformers.",
+                raw_model,
+            )
+        self._model_name = raw_model
 
         logger.info(
             "Loading Ollama embedding model | model={} url={}",
@@ -164,6 +168,27 @@ class OllamaEmbeddingModel(ManagedModel):
         )
 
         self._client = httpx.Client(timeout=60.0)
+
+        # First check if Ollama is reachable at all
+        try:
+            health_resp = self._client.get(self._base_url, timeout=5.0)
+            if health_resp.status_code != 200:
+                logger.warning(
+                    "Ollama responded with status {} at {}",
+                    health_resp.status_code,
+                    self._base_url,
+                )
+        except Exception as exc:
+            raise EmbeddingError(
+                message=(
+                    f"Cannot connect to Ollama at {self._base_url}. "
+                    f"Embedding generation requires Ollama. Either:\n"
+                    f"  1. Start Ollama: 'ollama serve'\n"
+                    f"  2. Fix OLLAMA_BASE_URL in .env\n"
+                    f"  3. Set USE_OLLAMA_EMBEDDINGS=false to use SentenceTransformers instead"
+                ),
+                detail=str(exc),
+            ) from exc
 
         # Probe for dimensions by embedding a test string
         try:
@@ -182,7 +207,11 @@ class OllamaEmbeddingModel(ManagedModel):
                 exc,
             )
             raise EmbeddingError(
-                message=f"Failed to load Ollama embedding model '{self._model_name}'",
+                message=(
+                    f"Failed to load Ollama embedding model '{self._model_name}'. "
+                    f"Make sure the model is pulled: 'ollama pull {self._model_name}'. "
+                    f"Or set USE_OLLAMA_EMBEDDINGS=false to use SentenceTransformers."
+                ),
                 detail=str(exc),
             ) from exc
 

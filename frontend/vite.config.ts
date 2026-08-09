@@ -6,8 +6,8 @@ export default defineConfig(({ mode }) => {
   // Load .env from project root (one level up from frontend/)
   const env = loadEnv(mode, path.resolve(__dirname, ".."), "");
 
-  // Backend port: read from BACKEND_PORT in root .env, fallback to 8001
-  const backendPort = env.BACKEND_PORT || "8001";
+  // Backend port: read from BACKEND_PORT in root .env, fallback to 8000
+  const backendPort = env.BACKEND_PORT || "8000";
   const backendUrl = `http://localhost:${backendPort}`;
 
   return {

@@ -5,7 +5,7 @@ x-logging: &default-logging
     max-file: "3"
 
 x-healthcheck: &backend-healthcheck
-  test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/api/v1/health', timeout=5)"]
+  test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health', timeout=5)"]
   interval: 15s
   timeout: 5s
   start_period: 30s
@@ -42,7 +42,7 @@ services:
       dockerfile: Dockerfile
     container_name: machine-guru-backend
     ports:
-      - "${BACKEND_PORT:-8001}:8001"
+      - "${BACKEND_PORT:-8000}:8000"
     env_file:
       - .env
     environment:
@@ -53,6 +53,7 @@ services:
       # Inside Docker, use service names as hostnames
       - OLLAMA_BASE_URL=${DOCKER_OLLAMA_URL:-http://ollama:11434}
       - QDRANT_HOST=qdrant
+      - BACKEND_PORT=8000
       - JSON_LOGGING=${JSON_LOGGING:-true}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - UPLOAD_DIR=/app/storage/uploads

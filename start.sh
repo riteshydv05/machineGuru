@@ -64,7 +64,7 @@ _env() {
     echo "${val:-$default}"
 }
 
-BACKEND_PORT="$(_env BACKEND_PORT 8001)"
+BACKEND_PORT="$(_env BACKEND_PORT 8000)"
 QDRANT_HOST="$(_env QDRANT_HOST localhost)"
 QDRANT_PORT="$(_env QDRANT_PORT 6333)"
 QDRANT_STORAGE="$(_env QDRANT_STORAGE_PATH ./storage/qdrant)"

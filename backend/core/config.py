@@ -33,18 +33,20 @@ class Settings(BaseSettings):
     DEBUG: bool = False
 
     # ── Network ──────────────────────────────────────────────
-    BACKEND_PORT: int = 8001
+    BACKEND_PORT: int = 8000
     CORS_ORIGINS: list[str] = [
         "http://localhost:5173",
         "http://localhost:5174",
+        "http://localhost:5179",
         "http://localhost:3000",
+        "http://localhost:8000",
         "http://localhost:80",
     ]
 
     # ── Ollama ───────────────────────────────────────────────
-    # Jetson Orin: Ollama is reachable via the Docker bridge IP.
-    # On local dev, override with OLLAMA_BASE_URL=http://localhost:11434 in .env.
-    OLLAMA_BASE_URL: str = "http://172.17.0.1:11434"
+    # macOS local dev: http://localhost:11434
+    # Jetson Orin Docker bridge: http://172.17.0.1:11434
+    OLLAMA_BASE_URL: str = "http://localhost:11434"
     LLM_MODEL: str = "llama3.2:1b"      # Only approved model for Jetson deployment
     VISION_MODEL: str = "llava:7b"
     EMBEDDING_MODEL: str = "intfloat/multilingual-e5-small"
